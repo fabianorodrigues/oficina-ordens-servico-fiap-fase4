@@ -3,25 +3,14 @@ name: Ordens CI
 on:
   pull_request:
     branches: [ main ]
-    paths:
-      - "src/**"
-      - "tests/**"
-      - "config/**"
-      - "deploy/**"
-      - "scripts/**"
-      - "Dockerfile"
-      - "Dockerfile.migration"
-      - ".dockerignore"
-      - "*.sln"
-      - "**/*.csproj"
-      - ".github/workflows/**"
 
 permissions:
   contents: read
 
 jobs:
   build-test-validate:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -100,9 +89,13 @@ jobs:
             'HorizontalPodAutoscaler',
             'replicas: 2',
             'PAYMENTS_USE_MOCK=false',
-            'terraform destroy'
+            ('terraform ' + 'destroy')
           )
           foreach ($pattern in $patterns) {
             $matches = rg -n $pattern -g '!**/bin/**' -g '!**/obj/**' -g '!**/TestResults/**' -g '!scripts/validate-payment-integration.ps1' -g '!.github/workflows/ci.yml' || $true
             if ($matches) { throw "Padrao proibido encontrado: $pattern`n$matches" }
           }
+
+      - name: Validate workflow contract
+        shell: pwsh
+        run: ./scripts/validate-workflows.ps1

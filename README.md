@@ -43,7 +43,7 @@ Artefatos adicionados para publicacao independente:
 - `Dockerfile.migration` para EF Migration Bundle.
 - `deploy/k8s/` com ServiceAccounts, SecretProviderClasses, ConfigMap, Service, Deployment `Recreate` com uma replica e Migration Job.
 - `scripts/validate-official-config.ps1`, `scripts/render-k8s-manifests.ps1`, `scripts/validate-ordens-deployment.ps1`, `scripts/smoke-test.ps1` e `scripts/run-saga-smoke-test.ps1`.
-- Workflows `Ordens CI`, `Ordens Deploy` e `Ordens Rollback`.
+- Workflows `Ordens CI` e `Ordens Deploy`.
 
 Banco oficial:
 
@@ -69,13 +69,19 @@ Execucao futura:
 GitHub -> Actions -> Ordens Deploy -> Run workflow -> main -> DEPLOY
 ```
 
-Rollback futuro:
+Validacoes AWS pendentes ate o acesso AWS Academy voltar: STS, SSM real, ECR real, Secrets Manager metadata, SQS real, redrive policies, Pod Identity/IRSA, CSI/ASCP, push de imagens, Migration Job, migration real, deployment EKS, consumer SQS real, Outbox real distribuido, compensacao real entre servicos, DLQ real, health/readiness no cluster e smoke test.
 
-```text
-GitHub -> Actions -> Ordens Rollback -> image_tag -> ROLLBACK
-```
+## CI/CD
 
-Validacoes AWS pendentes ate o acesso AWS Academy voltar: STS, SSM real, ECR real, Secrets Manager metadata, SQS real, redrive policies, Pod Identity/IRSA, CSI/ASCP, push de imagens, Migration Job, migration real, deployment EKS, consumer SQS real, Outbox real distribuido, compensacao real entre servicos, DLQ real, health/readiness no cluster, smoke test e rollback.
+- CI principal: `Ordens CI`, executada em todo Pull Request para `main`.
+- Required check esperado na branch protection: `Ordens CI`.
+- Workflow manual: `Ordens Deploy`, executado somente por `workflow_dispatch` na `main`, com confirmation `DEPLOY`.
+- Repository Secrets usados pelo deploy: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.
+- Repository Variables usadas pelo deploy: `AWS_REGION`.
+- A CI nao recebe credenciais AWS, nao publica imagens e nao altera AWS ou Kubernetes.
+- O deploy valida configuracao oficial, pagamento mock aprovado, integracao externa desabilitada, webhook externo desabilitado, SSM, SQS, Secrets Manager por metadata, ECR, migration, rollout, health e readiness.
+- Nao existe pipeline dedicada de rollback ou destroy. Para corrigir uma entrega, reverta ou ajuste o codigo em nova branch, abra Pull Request, aguarde `Ordens CI`, faca merge na `main` e execute novamente `Ordens Deploy`.
+- Branch protection recomendada: Pull Request obrigatorio, required check `Ordens CI`, bloqueio de force push e bloqueio de delecao da branch. Segundo revisor nao e obrigatorio para execucao individual ou dupla.
 
 ## Ambiente local (Docker Compose)
 

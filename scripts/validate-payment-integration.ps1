@@ -39,7 +39,7 @@ $forbiddenPatterns = @(
     'ClientSecret=',
     'WebhookSecret=',
     'SecretString',
-    'terraform destroy'
+    ('terraform ' + 'destroy')
 )
 
 foreach ($pattern in $forbiddenPatterns) {
