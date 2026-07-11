@@ -61,14 +61,19 @@ public sealed class PagamentoProcessor(
             if (result.Status == ResultadoPagamentoStatus.Aprovado)
             {
                 pagamento.MarcarAprovado(result.PagamentoExternoId ?? Guid.NewGuid().ToString());
+                var previousState = saga.Status;
                 saga.PagamentoAprovado();
+                db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, pagamento.OrdemServicoId, previousState, saga.Status, "PagamentoAprovado", null, "Pagamento mock aprovado."));
+                previousState = saga.Status;
                 saga.ReservaPendente();
+                db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, pagamento.OrdemServicoId, previousState, saga.Status, "ReservaSolicitada", null, "Comando de reserva criado no Outbox."));
                 if (!await db.OutboxMessages.AnyAsync(x => x.OrdemServicoId == pagamento.OrdemServicoId && x.MessageType == OrdensMessageTypes.ReservarEstoque, ct))
                     db.OutboxMessages.Add(FluxoDistribuidoOrdens.CriarReserva(orcamento, correlationId, null));
             }
             else if (result.Status == ResultadoPagamentoStatus.Recusado)
             {
                 pagamento.MarcarRecusado(result.PagamentoExternoId, result.Motivo ?? "Pagamento recusado.");
+                db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, pagamento.OrdemServicoId, saga.Status, saga.Status, "PagamentoRecusado", null, "Pagamento mock recusado."));
             }
             else
             {

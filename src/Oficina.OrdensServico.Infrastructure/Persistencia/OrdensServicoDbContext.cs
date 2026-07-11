@@ -13,6 +13,7 @@ public sealed class OrdensServicoDbContext(DbContextOptions<OrdensServicoDbConte
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<PagamentoOrdem> Pagamentos => Set<PagamentoOrdem>();
     public DbSet<SagaOrdemServico> SagasOrdensServico => Set<SagaOrdemServico>();
+    public DbSet<SagaSnapshot> SagaSnapshots => Set<SagaSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -141,6 +142,19 @@ public sealed class OrdensServicoDbContext(DbContextOptions<OrdensServicoDbConte
             e.Property(x => x.LastError).HasMaxLength(500);
             e.Property(x => x.RowVersion).IsRowVersion();
             e.HasIndex(x => x.OrdemServicoId).IsUnique();
+        });
+
+        b.Entity<SagaSnapshot>(e =>
+        {
+            e.ToTable("SagaSnapshots");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.PreviousState).HasConversion<int>().IsRequired();
+            e.Property(x => x.NewState).HasConversion<int>().IsRequired();
+            e.Property(x => x.EventType).HasMaxLength(120).IsRequired();
+            e.Property(x => x.TriggerMessageId).HasMaxLength(120);
+            e.Property(x => x.PayloadSummary).HasMaxLength(1000);
+            e.HasIndex(x => x.SagaId);
+            e.HasIndex(x => new { x.OrdemServicoId, x.OccurredAtUtc });
         });
     }
 }

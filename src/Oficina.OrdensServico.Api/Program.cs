@@ -4,12 +4,18 @@ using Microsoft.EntityFrameworkCore;
 using Oficina.OrdensServico.Api.Middleware;
 using Oficina.OrdensServico.Api.Observability;
 using Oficina.OrdensServico.Api.Security;
+using Oficina.OrdensServico.Api;
 using Oficina.OrdensServico.Application;
 using Oficina.OrdensServico.Application.Abstractions;
 using Oficina.OrdensServico.Infrastructure;
 using Oficina.OrdensServico.Infrastructure.Persistencia;
 
 var builder = WebApplication.CreateBuilder(args);
+
+if (builder.Environment.IsProduction())
+{
+    builder.Configuration.AddKeyPerFile("/mnt/secrets-store", optional: false, reloadOnChange: false);
+}
 
 builder.Configuration.AddEnvironmentVariables();
 builder.Logging.ClearProviders();
@@ -51,6 +57,7 @@ builder.Services.AddOpenTelemetryFailOpen(
 
 var app = builder.Build();
 
+ProductionStartupValidation.Validate(app.Configuration, app.Environment);
 await ApplyMigrationsIfEnabled(app);
 
 if (app.Environment.IsDevelopment())

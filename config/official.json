@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "application": {
+    "name": "oficina-ordens-servico",
+    "environment": "Production",
+    "containerPort": 8080
+  },
+  "aws": {
+    "clusterNameParameter": "/oficina/infra/cluster/name",
+    "ecrRepositoryParameter": "/oficina/infra/ecr/ordens",
+    "regionFromWorkflow": true
+  },
+  "kubernetes": {
+    "namespace": "oficina",
+    "deploymentName": "oficina-ordens-servico",
+    "serviceName": "oficina-ordens-servico",
+    "runtimeServiceAccount": "ordens-runtime",
+    "migrationServiceAccount": "ordens-migrator",
+    "replicas": 1,
+    "deploymentStrategy": "Recreate"
+  },
+  "secrets": {
+    "runtimeDatabase": "/oficina/ordens/runtime-db",
+    "migrationDatabase": "/oficina/ordens/migration-db",
+    "payments": "/oficina/payments/mercado-pago"
+  },
+  "queues": {
+    "commandsUrlParameter": "/oficina/infra/sqs/estoque-comandos/url",
+    "commandsArnParameter": "/oficina/infra/sqs/estoque-comandos/arn",
+    "commandsDlqUrlParameter": "/oficina/infra/sqs/estoque-comandos-dlq/url",
+    "commandsDlqArnParameter": "/oficina/infra/sqs/estoque-comandos-dlq/arn",
+    "eventsUrlParameter": "/oficina/infra/sqs/ordens-eventos/url",
+    "eventsArnParameter": "/oficina/infra/sqs/ordens-eventos/arn",
+    "eventsDlqUrlParameter": "/oficina/infra/sqs/ordens-eventos-dlq/url",
+    "eventsDlqArnParameter": "/oficina/infra/sqs/ordens-eventos-dlq/arn",
+    "consumerConcurrency": 1,
+    "maxMessagesPerReceive": 1,
+    "waitTimeSeconds": 20,
+    "visibilityTimeoutSeconds": 60
+  },
+  "services": {
+    "cadastroBaseUrl": "http://oficina-cadastro",
+    "estoqueBaseUrl": "http://oficina-estoque"
+  },
+  "payments": {
+    "useMock": true,
+    "provider": "Mock",
+    "timeoutSeconds": 5,
+    "maxRetryAttempts": 2
+  },
+  "health": {
+    "path": "/health",
+    "readinessPath": "/ready",
+    "initialDelaySeconds": 10,
+    "periodSeconds": 10,
+    "timeoutSeconds": 3,
+    "failureThreshold": 6
+  },
+  "deployment": {
+    "progressDeadlineSeconds": 600,
+    "terminationGracePeriodSeconds": 30
+  }
+}

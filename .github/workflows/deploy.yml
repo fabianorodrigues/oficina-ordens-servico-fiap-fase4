@@ -1,0 +1,134 @@
+name: Ordens Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY to continue
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ordens-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate ref and confirmation
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "${{ inputs.confirmation }}" = "DEPLOY"
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Validate official config
+        shell: pwsh
+        run: ./scripts/validate-official-config.ps1
+
+      - name: Validate region
+        run: test -n "${{ vars.AWS_REGION }}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Read AWS metadata
+        id: meta
+        run: |
+          aws sts get-caller-identity >/dev/null
+          CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name --query Parameter.Value --output text)
+          ECR=$(aws ssm get-parameter --name /oficina/infra/ecr/ordens --query Parameter.Value --output text)
+          COMMANDS=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos/url --query Parameter.Value --output text)
+          COMMANDS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos-dlq/url --query Parameter.Value --output text)
+          EVENTS=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos/url --query Parameter.Value --output text)
+          EVENTS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos-dlq/url --query Parameter.Value --output text)
+          aws secretsmanager describe-secret --secret-id /oficina/ordens/runtime-db >/dev/null
+          aws secretsmanager describe-secret --secret-id /oficina/ordens/migration-db >/dev/null
+          echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
+          echo "ecr=$ECR" >> "$GITHUB_OUTPUT"
+          echo "commands=$COMMANDS" >> "$GITHUB_OUTPUT"
+          echo "commands_dlq=$COMMANDS_DLQ" >> "$GITHUB_OUTPUT"
+          echo "events=$EVENTS" >> "$GITHUB_OUTPUT"
+          echo "events_dlq=$EVENTS_DLQ" >> "$GITHUB_OUTPUT"
+
+      - name: Restore build test
+        run: |
+          dotnet restore Oficina.OrdensServico.sln
+          dotnet build Oficina.OrdensServico.sln -c Release --no-restore
+          dotnet test Oficina.OrdensServico.sln -c Release --no-build
+
+      - name: Login ECR
+        uses: aws-actions/amazon-ecr-login@v3
+
+      - name: Build images
+        run: |
+          docker build -f Dockerfile -t "${{ steps.meta.outputs.ecr }}:${GITHUB_SHA}" .
+          docker build -f Dockerfile.migration -t "${{ steps.meta.outputs.ecr }}:${GITHUB_SHA}-migration" .
+
+      - name: Push images
+        run: |
+          docker push "${{ steps.meta.outputs.ecr }}:${GITHUB_SHA}"
+          docker push "${{ steps.meta.outputs.ecr }}:${GITHUB_SHA}-migration"
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "${{ steps.meta.outputs.cluster }}" --region "${{ vars.AWS_REGION }}"
+
+      - name: Render manifests
+        shell: pwsh
+        run: >
+          ./scripts/render-k8s-manifests.ps1
+          -RuntimeImage "${{ steps.meta.outputs.ecr }}:${{ github.sha }}"
+          -MigrationImage "${{ steps.meta.outputs.ecr }}:${{ github.sha }}-migration"
+          -AwsRegion "${{ vars.AWS_REGION }}"
+          -CommandsQueueUrl "${{ steps.meta.outputs.commands }}"
+          -CommandsDlqUrl "${{ steps.meta.outputs.commands_dlq }}"
+          -EventsQueueUrl "${{ steps.meta.outputs.events }}"
+          -EventsDlqUrl "${{ steps.meta.outputs.events_dlq }}"
+          -MigrationJobName "ordens-migration-${{ github.run_number }}"
+
+      - name: Deploy migration and runtime
+        run: |
+          kubectl get namespace oficina
+          kubectl apply -f artifacts/k8s/service-account-runtime.yaml
+          kubectl apply -f artifacts/k8s/service-account-migration.yaml
+          kubectl apply -f artifacts/k8s/secret-provider-class-runtime.yaml
+          kubectl apply -f artifacts/k8s/secret-provider-class-migration.yaml
+          kubectl apply -f artifacts/k8s/configmap.yaml
+          kubectl apply -f artifacts/k8s/service.yaml
+          kubectl apply -f artifacts/k8s/migration-job.yaml
+          kubectl wait --for=condition=complete --timeout=600s job/ordens-migration-${{ github.run_number }} -n oficina
+          kubectl apply -f artifacts/k8s/deployment.yaml
+          kubectl rollout status deployment/oficina-ordens-servico -n oficina --timeout=600s
+
+      - name: Health and readonly validation
+        shell: pwsh
+        run: |
+          kubectl port-forward service/oficina-ordens-servico 18080:80 -n oficina &
+          Start-Sleep -Seconds 5
+          ./scripts/smoke-test.ps1 -BaseUrl http://localhost:18080
+          ./scripts/validate-ordens-deployment.ps1 -ExpectedImageTag "${{ github.sha }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "Commit SHA: ${GITHUB_SHA}"
+            echo "Runtime image tag: ${GITHUB_SHA}"
+            echo "Migration image tag: ${GITHUB_SHA}-migration"
+            echo "Cluster: ${{ steps.meta.outputs.cluster }}"
+            echo "Namespace: oficina"
+            echo "Payment provider: Mock"
+            echo "Health: /health"
+            echo "Readiness: /ready"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -21,9 +21,9 @@ internal sealed class OrdensSqsReceiver(
         var response = await sqs.ReceiveMessageAsync(new ReceiveMessageRequest
         {
             QueueUrl = _queueUrl,
-            MaxNumberOfMessages = 5,
-            WaitTimeSeconds = 5,
-            VisibilityTimeout = 20
+            MaxNumberOfMessages = options.Value.MaxMessagesPerReceive,
+            WaitTimeSeconds = options.Value.WaitTimeSeconds,
+            VisibilityTimeout = options.Value.VisibilityTimeoutSeconds
         }, ct);
 
         foreach (var message in response.Messages ?? [])

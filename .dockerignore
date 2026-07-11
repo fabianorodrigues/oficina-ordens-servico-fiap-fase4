@@ -8,4 +8,7 @@ obj
 *.user
 *.suo
 *.binlog
-README.md
+.git
+.github
+.vs
+.env.local

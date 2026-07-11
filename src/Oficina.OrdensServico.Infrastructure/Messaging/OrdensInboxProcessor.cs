@@ -87,8 +87,12 @@ internal sealed class OrdensInboxProcessor(
         {
             var payload = envelope.Payload.Deserialize<EstoqueReservadoPayload>(MessageJson.Options)
                 ?? throw new InvalidOperationException("Payload de reserva confirmada invalido.");
+            var previousState = saga.Status;
             saga.Reservada(payload.ReservaId);
+            db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, inbox.MessageType, inbox.MessageId.ToString(), "Reserva confirmada pelo Estoque."));
+            previousState = saga.Status;
             saga.Concluir();
+            db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, "SagaConcluida", inbox.MessageId.ToString(), "Saga concluida apos reserva."));
             var os = await db.OrdensServico.FirstAsync(x => x.Id == inbox.OrdemServicoId, ct);
             if (os.Status == StatusOrdemServico.AguardandoAprovacao)
                 os.IniciarExecucao();
@@ -100,7 +104,9 @@ internal sealed class OrdensInboxProcessor(
         {
             var payload = envelope.Payload.Deserialize<ReservaEstoqueRecusadaPayload>(MessageJson.Options)
                 ?? throw new InvalidOperationException("Payload de reserva recusada invalido.");
+            var previousState = saga.Status;
             saga.ReservaRecusada(payload.Motivo);
+            db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, inbox.MessageType, inbox.MessageId.ToString(), payload.Codigo));
             inbox.MarkProcessed();
             return;
         }
@@ -116,7 +122,9 @@ internal sealed class OrdensInboxProcessor(
             var os = await db.OrdensServico.FirstAsync(x => x.Id == inbox.OrdemServicoId, ct);
             if (os.Status is StatusOrdemServico.EmExecucao or StatusOrdemServico.AguardandoAprovacao)
                 os.RetornarParaEsperaAposCompensacao();
+            var previousState = saga.Status;
             saga.Compensada();
+            db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, inbox.MessageType, inbox.MessageId.ToString(), "Reserva liberada pelo Estoque."));
             inbox.MarkProcessed();
             return;
         }
@@ -125,7 +133,9 @@ internal sealed class OrdensInboxProcessor(
         {
             var payload = envelope.Payload.Deserialize<LiberacaoReservaFalhouPayload>(MessageJson.Options)
                 ?? throw new InvalidOperationException("Payload de liberacao recusada invalido.");
+            var previousState = saga.Status;
             saga.CompensacaoFalhou(payload.Motivo);
+            db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, inbox.MessageType, inbox.MessageId.ToString(), payload.Codigo));
             inbox.MarkProcessed();
             return;
         }

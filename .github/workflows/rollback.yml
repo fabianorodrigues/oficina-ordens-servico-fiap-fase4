@@ -1,0 +1,74 @@
+name: Ordens Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Runtime image tag to deploy
+        required: true
+      confirmation:
+        description: Type ROLLBACK to continue
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ordens-deploy
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate inputs
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "${{ inputs.confirmation }}" = "ROLLBACK"
+          echo "${{ inputs.image_tag }}" | grep -Eq '^[0-9a-fA-F]{7,40}$'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Read metadata and validate image
+        id: meta
+        run: |
+          CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name --query Parameter.Value --output text)
+          ECR=$(aws ssm get-parameter --name /oficina/infra/ecr/ordens --query Parameter.Value --output text)
+          aws ecr describe-images --repository-name oficina-ordens-servico --image-ids imageTag=${{ inputs.image_tag }} >/dev/null
+          echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
+          echo "ecr=$ECR" >> "$GITHUB_OUTPUT"
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "${{ steps.meta.outputs.cluster }}" --region "${{ vars.AWS_REGION }}"
+
+      - name: Set image
+        run: |
+          kubectl get deployment oficina-ordens-servico -n oficina -o jsonpath='{.spec.strategy.type}' | grep -x Recreate
+          kubectl get deployment oficina-ordens-servico -n oficina -o jsonpath='{.spec.replicas}' | grep -x 1
+          kubectl set image deployment/oficina-ordens-servico api="${{ steps.meta.outputs.ecr }}:${{ inputs.image_tag }}" -n oficina
+          kubectl rollout status deployment/oficina-ordens-servico -n oficina --timeout=600s
+
+      - name: Health and readiness
+        shell: pwsh
+        run: |
+          kubectl port-forward service/oficina-ordens-servico 18080:80 -n oficina &
+          Start-Sleep -Seconds 5
+          ./scripts/smoke-test.ps1 -BaseUrl http://localhost:18080
+          ./scripts/validate-ordens-deployment.ps1 -ExpectedImageTag "${{ inputs.image_tag }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "Rollback image tag: ${{ inputs.image_tag }}"
+            echo "Cluster: ${{ steps.meta.outputs.cluster }}"
+            echo "Namespace: oficina"
+            echo "Payment provider: Mock"
+          } >> "$GITHUB_STEP_SUMMARY"

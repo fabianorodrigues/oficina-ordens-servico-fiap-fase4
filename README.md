@@ -26,6 +26,51 @@ Aprovar um orcamento inicia um fluxo assincrono: pagamento (mock ou API real via
 
 Autenticacao em ambiente local via header scheme (`Authentication:Mode=Development`), bloqueada fora de `Development`.
 
+Na Etapa 12, o modo oficial de publicacao usa `ASPNETCORE_ENVIRONMENT=Production` e exige `Payments:UseMock=true` com provider `Mock`. A integracao real com Mercado Pago, webhook e auditoria NoSQL ficam para etapa posterior.
+
+## Publicacao EKS preparada
+
+Artefatos adicionados para publicacao independente:
+
+- `config/official.json` com dados nao sensiveis da configuracao oficial.
+- `Dockerfile` para a imagem runtime sem SDK.
+- `Dockerfile.migration` para EF Migration Bundle.
+- `deploy/k8s/` com ServiceAccounts, SecretProviderClasses, ConfigMap, Service, Deployment `Recreate` com uma replica e Migration Job.
+- `scripts/validate-official-config.ps1`, `scripts/render-k8s-manifests.ps1`, `scripts/validate-ordens-deployment.ps1`, `scripts/smoke-test.ps1` e `scripts/run-saga-smoke-test.ps1`.
+- Workflows `Ordens CI`, `Ordens Deploy` e `Ordens Rollback`.
+
+Banco oficial:
+
+- Database: `OficinaOrdensServicoDb`
+- Runtime user: `ordens_app`
+- Migration user: `ordens_migrator`
+- Secrets: `/oficina/ordens/runtime-db` e `/oficina/ordens/migration-db`
+
+As senhas e connection strings nao sao versionadas neste repositorio. Em Production a connection string e lida via Secrets Store CSI em `/mnt/secrets-store` com `AddKeyPerFile`, usando a chave `ConnectionStrings__DefaultConnection`.
+
+Filas oficiais:
+
+- Comandos para Estoque: `oficina-estoque-comandos.fifo`
+- DLQ de comandos: `oficina-estoque-comandos-dlq.fifo`
+- Eventos para Ordens: `oficina-ordens-eventos.fifo`
+- DLQ de eventos: `oficina-ordens-eventos-dlq.fifo`
+
+Decisoes preservadas: uma replica, strategy `Recreate`, consumer concurrency 1, sem HPA, Inbox, Outbox, Saga persistida, snapshots de Saga, compensacao e pagamento mock.
+
+Execucao futura:
+
+```text
+GitHub -> Actions -> Ordens Deploy -> Run workflow -> main -> DEPLOY
+```
+
+Rollback futuro:
+
+```text
+GitHub -> Actions -> Ordens Rollback -> image_tag -> ROLLBACK
+```
+
+Validacoes AWS pendentes ate o acesso AWS Academy voltar: STS, SSM real, ECR real, Secrets Manager metadata, SQS real, redrive policies, Pod Identity/IRSA, CSI/ASCP, push de imagens, Migration Job, migration real, deployment EKS, consumer SQS real, Outbox real distribuido, compensacao real entre servicos, DLQ real, health/readiness no cluster, smoke test e rollback.
+
 ## Ambiente local (Docker Compose)
 
 Este repositorio contem o `docker-compose.local.yml` que orquestra os tres servicos (Cadastro, Estoque, Ordens de Servico), SQL Server, LocalStack (SQS) e um mock de pagamentos (WireMock).

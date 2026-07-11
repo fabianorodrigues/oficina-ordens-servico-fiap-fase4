@@ -1,0 +1,93 @@
+name: Ordens CI
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "config/**"
+      - "deploy/**"
+      - "scripts/**"
+      - "Dockerfile"
+      - "Dockerfile.migration"
+      - ".dockerignore"
+      - "*.sln"
+      - "**/*.csproj"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore Oficina.OrdensServico.sln
+
+      - name: Build
+        run: dotnet build Oficina.OrdensServico.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test Oficina.OrdensServico.sln -c Release --no-build --collect:"XPlat Code Coverage"
+
+      - name: Validate official config
+        shell: pwsh
+        run: ./scripts/validate-official-config.ps1
+
+      - name: Build runtime image
+        run: docker build -f Dockerfile -t oficina-ordens-servico:${{ github.sha }} .
+
+      - name: Build migration image
+        run: docker build -f Dockerfile.migration -t oficina-ordens-servico:${{ github.sha }}-migration .
+
+      - name: Render synthetic manifests
+        shell: pwsh
+        run: >
+          ./scripts/render-k8s-manifests.ps1
+          -RuntimeImage oficina-ordens-servico:${{ github.sha }}
+          -MigrationImage oficina-ordens-servico:${{ github.sha }}-migration
+          -AwsRegion us-east-1
+          -CommandsQueueUrl http://localhost:4566/000000000000/oficina-estoque-comandos.fifo
+          -CommandsDlqUrl http://localhost:4566/000000000000/oficina-estoque-comandos-dlq.fifo
+          -EventsQueueUrl http://localhost:4566/000000000000/oficina-ordens-eventos.fifo
+          -EventsDlqUrl http://localhost:4566/000000000000/oficina-ordens-eventos-dlq.fifo
+          -MigrationJobName ordens-migration-ci
+
+      - name: PowerShell AST
+        shell: pwsh
+        run: |
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { throw "PowerShell AST failure in $($_.Name)" }
+          }
+
+      - name: Security search
+        shell: pwsh
+        run: |
+          $patterns = @(
+            'SQL_ORDENS_APP_PASSWORD',
+            'SQL_ORDENS_MIGRATOR_PASSWORD',
+            'MERCADO_PAGO_ACCESS_TOKEN',
+            'ClientSecret=',
+            'WebhookSecret=',
+            'Database.Migrate',
+            'EnsureCreated',
+            'HorizontalPodAutoscaler',
+            'replicas: 2',
+            'PAYMENTS_USE_MOCK=false',
+            'terraform destroy'
+          )
+          foreach ($pattern in $patterns) {
+            $matches = rg -n $pattern -g '!**/bin/**' -g '!**/obj/**' -g '!**/TestResults/**' || $true
+            if ($matches) { throw "Padrao proibido encontrado: $pattern`n$matches" }
+          }

@@ -26,7 +26,9 @@ public sealed class FluxoDistribuidoOrdens(OrdensServicoDbContext db) : IFluxoDi
         if (saga.ReservaId is null) throw new OrdensException("Reserva inexistente para compensacao.", 409, "reserva_inexistente");
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var previousState = saga.Status;
         saga.CompensacaoPendente();
+        db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, ordemServicoId, previousState, saga.Status, "CompensacaoSolicitada", null, "Solicitada liberacao de reserva."));
         db.OutboxMessages.Add(CriarLiberacao(ordemServicoId, saga.ReservaId.Value, correlationId, null));
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
@@ -41,7 +43,9 @@ public sealed class FluxoDistribuidoOrdens(OrdensServicoDbContext db) : IFluxoDi
         if (orcamento.Status != StatusOrcamento.Aprovado) throw new OrdensException("Orcamento precisa estar aprovado.", 409);
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var previousState = saga.Status;
         saga.ReservaPendente();
+        db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, ordemServicoId, previousState, saga.Status, "ReservaReprocessada", null, "Reserva reenfileirada."));
         db.OutboxMessages.Add(CriarReserva(orcamento, correlationId, null, novaTentativa: true));
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);

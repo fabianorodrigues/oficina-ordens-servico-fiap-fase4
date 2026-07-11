@@ -20,7 +20,10 @@ public static class SqsMessagingRegistration
             var config = new AmazonSQSConfig { RegionEndpoint = RegionEndpoint.GetBySystemName(options.Region) };
             if (!string.IsNullOrWhiteSpace(options.ServiceUrl))
                 config.ServiceURL = options.ServiceUrl;
-            return new AmazonSQSClient(new BasicAWSCredentials(options.AccessKey, options.SecretKey), config);
+            if (!string.IsNullOrWhiteSpace(options.ServiceUrl))
+                return new AmazonSQSClient(new BasicAWSCredentials(options.AccessKey, options.SecretKey), config);
+
+            return new AmazonSQSClient(config);
         });
         services.AddHostedService<OrdensSqsReceiver>();
         services.AddHostedService<OrdensInboxProcessor>();

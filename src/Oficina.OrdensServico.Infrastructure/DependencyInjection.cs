@@ -14,8 +14,16 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddOrdensInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        var cs = configuration.GetConnectionString("OficinaOrdensServicoDb")
-            ?? "Server=(localdb)\\mssqllocaldb;Database=OficinaOrdensServicoDb;Trusted_Connection=True;MultipleActiveResultSets=true;TrustServerCertificate=True";
+        var isProduction = string.Equals(configuration["ASPNETCORE_ENVIRONMENT"], "Production", StringComparison.OrdinalIgnoreCase);
+        var cs = configuration.GetConnectionString("DefaultConnection")
+            ?? configuration.GetConnectionString("OficinaOrdensServicoDb");
+        if (string.IsNullOrWhiteSpace(cs))
+        {
+            if (isProduction)
+                throw new InvalidOperationException("A connection string obrigatoria nao foi configurada.");
+
+            cs = "Server=(localdb)\\mssqllocaldb;Database=OficinaOrdensServicoDb;Trusted_Connection=True;MultipleActiveResultSets=true;TrustServerCertificate=True";
+        }
         services.AddDbContext<OrdensServicoDbContext>(o => o
             .UseSqlServer(cs)
             .ConfigureWarnings(warnings => warnings.Ignore(RelationalEventId.PendingModelChangesWarning)));
@@ -33,7 +41,13 @@ public static class DependencyInjection
             c.Timeout = TimeSpan.FromSeconds(configuration.GetValue("Integrations:Estoque:TimeoutSeconds", 5));
         }).AddHttpMessageHandler<CorrelationHeaderHandler>();
         services.AddScoped<IFluxoDistribuidoOrdens, FluxoDistribuidoOrdens>();
-        if (string.Equals(configuration["Payments:Mode"], "Mock", StringComparison.OrdinalIgnoreCase))
+        var useMock = configuration.GetValue("Payments:UseMock", false)
+            || string.Equals(configuration["PAYMENTS_USE_MOCK"], "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(configuration["Payments:Mode"], "Mock", StringComparison.OrdinalIgnoreCase);
+        if (isProduction && !useMock)
+            throw new InvalidOperationException("O pagamento real nao esta habilitado nesta versao.");
+
+        if (useMock)
         {
             services.AddSingleton<IPagamentoGateway, MockPagamentoGateway>();
         }

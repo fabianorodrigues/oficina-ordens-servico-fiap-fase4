@@ -53,3 +53,46 @@ public sealed class SagaOrdemServico : Entidade
 
     private static string Sanitizar(string erro) => erro.Length <= 500 ? erro : erro[..500];
 }
+
+public sealed class SagaSnapshot
+{
+    private SagaSnapshot() { }
+
+    public SagaSnapshot(
+        Guid sagaId,
+        Guid ordemServicoId,
+        StatusSagaOrdemServico previousState,
+        StatusSagaOrdemServico newState,
+        string eventType,
+        string? triggerMessageId,
+        string? payloadSummary)
+    {
+        Id = Guid.NewGuid();
+        SagaId = sagaId;
+        OrdemServicoId = ordemServicoId;
+        PreviousState = previousState;
+        NewState = newState;
+        EventType = eventType;
+        TriggerMessageId = triggerMessageId;
+        PayloadSummary = Sanitize(payloadSummary);
+        OccurredAtUtc = DateTimeOffset.UtcNow;
+    }
+
+    public Guid Id { get; private set; }
+    public Guid SagaId { get; private set; }
+    public Guid OrdemServicoId { get; private set; }
+    public StatusSagaOrdemServico PreviousState { get; private set; }
+    public StatusSagaOrdemServico NewState { get; private set; }
+    public string EventType { get; private set; } = string.Empty;
+    public string? TriggerMessageId { get; private set; }
+    public string? PayloadSummary { get; private set; }
+    public DateTimeOffset OccurredAtUtc { get; private set; }
+
+    private static string? Sanitize(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return value.Length <= 1000 ? value : value[..1000];
+    }
+}
