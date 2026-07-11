@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/payments",
+    "bodyPatterns": [{ "matchesJsonPath": "$[?(@.scenario == 'pendente')]" }]
+  },
+  "response": {
+    "status": 202,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "providerPaymentId": "{{randomValue type='UUID'}}",
+      "status": "pendente"
+    }
+  }
+}

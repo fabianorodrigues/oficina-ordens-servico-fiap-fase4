@@ -1,0 +1,12 @@
+ARG DOTNET_VERSION=10.0
+
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}
+WORKDIR /src
+
+COPY global.json ./
+COPY tests/Oficina.EndToEndTests/Oficina.EndToEndTests.csproj tests/Oficina.EndToEndTests/
+RUN dotnet restore tests/Oficina.EndToEndTests/Oficina.EndToEndTests.csproj
+
+COPY tests/Oficina.EndToEndTests tests/Oficina.EndToEndTests
+WORKDIR /src/tests/Oficina.EndToEndTests
+ENTRYPOINT ["dotnet", "test", "-c", "Release", "--no-restore", "--logger", "console;verbosity=normal"]

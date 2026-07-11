@@ -1,0 +1,3 @@
+$root = Split-Path -Parent $PSScriptRoot
+Set-Location $root
+docker compose -f docker-compose.local.yml --env-file .env.local down
