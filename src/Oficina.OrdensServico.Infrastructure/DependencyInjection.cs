@@ -14,6 +14,7 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddOrdensInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddSingleton(configuration);
         var isProduction = string.Equals(configuration["ASPNETCORE_ENVIRONMENT"], "Production", StringComparison.OrdinalIgnoreCase);
         var cs = configuration.GetConnectionString("DefaultConnection")
             ?? configuration.GetConnectionString("OficinaOrdensServicoDb");
@@ -41,26 +42,57 @@ public static class DependencyInjection
             c.Timeout = TimeSpan.FromSeconds(configuration.GetValue("Integrations:Estoque:TimeoutSeconds", 5));
         }).AddHttpMessageHandler<CorrelationHeaderHandler>();
         services.AddScoped<IFluxoDistribuidoOrdens, FluxoDistribuidoOrdens>();
-        var useMock = configuration.GetValue("Payments:UseMock", false)
-            || string.Equals(configuration["PAYMENTS_USE_MOCK"], "true", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(configuration["Payments:Mode"], "Mock", StringComparison.OrdinalIgnoreCase);
-        if (isProduction && !useMock)
-            throw new InvalidOperationException("O pagamento real nao esta habilitado nesta versao.");
+        ValidatePayments(configuration);
 
-        if (useMock)
+        services.AddSingleton<IExternalPaymentContractMapper, PendingExternalPaymentContractMapper>();
+        services.AddSingleton<IPaymentWebhookAuthenticator, PendingPaymentWebhookAuthenticator>();
+        services.AddScoped<IPaymentWebhookHandler, PaymentWebhookHandler>();
+
+        if (UseMock(configuration))
         {
             services.AddSingleton<IPagamentoGateway, MockPagamentoGateway>();
         }
         else
         {
-            services.AddHttpClient<IPagamentoGateway, ApiPagamentoGateway>(c =>
+            services.AddHttpClient<IPagamentoGateway, ExternalPaymentApiGateway>("ExternalPaymentApi", c =>
             {
-                c.BaseAddress = new Uri(configuration["Payments:BaseUrl"] ?? "http://localhost:5110");
+                c.BaseAddress = new Uri(configuration["Payments:BaseUrl"]!);
                 c.Timeout = TimeSpan.FromSeconds(configuration.GetValue("Payments:TimeoutSeconds", 5));
             });
         }
         services.AddHostedService<PagamentoProcessor>();
         services.AddOrdensMessaging(configuration);
         return services;
+    }
+
+    private static bool UseMock(IConfiguration configuration) =>
+        configuration.GetValue("Payments:UseMock", false)
+        || string.Equals(configuration["PAYMENTS_USE_MOCK"], "true", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(configuration["Payments:Mode"], "Mock", StringComparison.OrdinalIgnoreCase);
+
+    private static void ValidatePayments(IConfiguration configuration)
+    {
+        var behavior = configuration["Payments:MockBehavior"] ?? configuration["Payments:Scenario"] ?? "Approved";
+        if (!new[] { "Approved", "Aprovado", "Rejected", "Recusado", "Pending", "Pendente" }
+            .Contains(behavior, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Payments:MockBehavior invalido.");
+
+        if (UseMock(configuration))
+            return;
+
+        if (!configuration.GetValue("Payments:ExternalApiEnabled", false))
+            throw new InvalidOperationException("Payments:ExternalApiEnabled=true e obrigatorio quando UseMock=false.");
+        if (!string.Equals(configuration["Payments:ContractStatus"], "Ready", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Payments:ContractStatus=Ready e obrigatorio quando UseMock=false.");
+        if (string.IsNullOrWhiteSpace(configuration["Payments:BaseUrl"]))
+            throw new InvalidOperationException("Payments:BaseUrl e obrigatorio quando UseMock=false.");
+        if (string.IsNullOrWhiteSpace(configuration["Payments:SubmitPath"]))
+            throw new InvalidOperationException("Payments:SubmitPath e obrigatorio quando UseMock=false.");
+        if (!configuration.GetValue("Payments:ExternalWebhookEnabled", false))
+            throw new InvalidOperationException("Payments:ExternalWebhookEnabled=true e obrigatorio quando UseMock=false.");
+        if (string.IsNullOrWhiteSpace(configuration["Application:PublicBaseUrl"]))
+            throw new InvalidOperationException("Application:PublicBaseUrl e obrigatorio quando UseMock=false.");
+
+        throw new InvalidOperationException("Contrato externo de pagamentos pendente. Registre mapper e autenticador concretos antes de UseMock=false.");
     }
 }

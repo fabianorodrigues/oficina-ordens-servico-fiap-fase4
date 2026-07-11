@@ -21,8 +21,7 @@
   },
   "secrets": {
     "runtimeDatabase": "/oficina/ordens/runtime-db",
-    "migrationDatabase": "/oficina/ordens/migration-db",
-    "payments": "/oficina/payments/mercado-pago"
+    "migrationDatabase": "/oficina/ordens/migration-db"
   },
   "queues": {
     "commandsUrlParameter": "/oficina/infra/sqs/estoque-comandos/url",
@@ -44,9 +43,16 @@
   },
   "payments": {
     "useMock": true,
-    "provider": "Mock",
+    "mockBehavior": "Approved",
+    "externalApiEnabled": false,
+    "externalWebhookEnabled": false,
+    "contractStatus": "Pending",
+    "baseUrl": null,
+    "submitPath": null,
     "timeoutSeconds": 5,
-    "maxRetryAttempts": 2
+    "maxRetryAttempts": 2,
+    "webhookPath": "/api/webhooks/payments",
+    "maxWebhookBodyBytes": 65536
   },
   "health": {
     "path": "/health",

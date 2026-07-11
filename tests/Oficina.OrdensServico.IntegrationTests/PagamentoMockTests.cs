@@ -6,12 +6,12 @@ namespace Oficina.OrdensServico.IntegrationTests;
 public sealed class PagamentoMockTests
 {
     [Theory]
-    [InlineData("aprovado", ResultadoPagamentoStatus.Aprovado)]
-    [InlineData("recusado", ResultadoPagamentoStatus.Recusado)]
-    [InlineData("pendente", ResultadoPagamentoStatus.Pendente)]
+    [InlineData("Approved", ResultadoPagamentoStatus.Aprovado)]
+    [InlineData("Rejected", ResultadoPagamentoStatus.Recusado)]
+    [InlineData("Pending", ResultadoPagamentoStatus.Pendente)]
     public async Task Mock_pagamento_suporta_cenarios_principais(string scenario, ResultadoPagamentoStatus expected)
     {
-        var gateway = new MockPagamentoGateway(Config(("Payments:Scenario", scenario)));
+        var gateway = new MockPagamentoGateway(Config(("Payments:MockBehavior", scenario)));
         var request = Request();
 
         var first = await gateway.Processar(request, CancellationToken.None);
@@ -22,10 +22,30 @@ public sealed class PagamentoMockTests
     }
 
     [Fact]
-    public async Task Mock_pagamento_simula_erro_transitorio()
+    public async Task Mock_pagamento_retorna_referencia_estavel_sem_http()
     {
-        var gateway = new MockPagamentoGateway(Config(("Payments:Scenario", "erro-transitorio")));
-        await Assert.ThrowsAsync<HttpRequestException>(() => gateway.Processar(Request(), CancellationToken.None));
+        var gateway = new MockPagamentoGateway(Config(("Payments:MockBehavior", "Approved")));
+        var request = Request();
+
+        var result = await gateway.Processar(request, CancellationToken.None);
+
+        Assert.Equal(ResultadoPagamentoStatus.Aprovado, result.Status);
+        Assert.Equal("mock-ordem-servico-teste-pagamento", result.PagamentoExternoId);
+    }
+
+    [Fact]
+    public async Task Mock_compensacao_retorna_sucesso_idempotente()
+    {
+        var gateway = new MockPagamentoGateway(Config(("Payments:MockBehavior", "Approved")));
+        var pagamentoId = Guid.NewGuid();
+        var request = new PagamentoCompensacaoRequest(Guid.NewGuid(), pagamentoId, "compensacao", "correlation-test");
+
+        var first = await gateway.Compensar(request, CancellationToken.None);
+        var second = await gateway.Compensar(request, CancellationToken.None);
+
+        Assert.True(first.Succeeded);
+        Assert.Equal(first.CompensacaoExternaId, second.CompensacaoExternaId);
+        Assert.Equal($"mock-compensation-{pagamentoId:N}", first.CompensacaoExternaId);
     }
 
     [Fact]

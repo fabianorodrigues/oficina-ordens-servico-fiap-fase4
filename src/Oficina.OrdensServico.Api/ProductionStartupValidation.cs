@@ -24,11 +24,19 @@ internal static class ProductionStartupValidation
             throw new InvalidOperationException("Database__ApplyMigrations=true so pode ser usado em Development.");
         if (string.Equals(configuration["Authentication:Mode"], "Development", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Authentication Development nao pode ser usado em Production.");
-        if (!string.Equals(configuration["Payments:Mode"], "Mock", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("O pagamento real nao esta habilitado nesta versao.");
         if (!configuration.GetValue("Payments:UseMock", false) &&
-            !string.Equals(configuration["PAYMENTS_USE_MOCK"], "true", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("PAYMENTS_USE_MOCK deve estar habilitado nesta versao.");
+            !string.Equals(configuration["PAYMENTS_USE_MOCK"], "true", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(configuration["Payments:Mode"], "Mock", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Payments__UseMock=true deve estar habilitado nesta versao.");
+        if (!string.Equals(configuration["Payments:MockBehavior"], "Approved", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(configuration["Payments:Scenario"], "aprovado", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Payments__MockBehavior=Approved deve ser usado nesta versao.");
+        if (configuration.GetValue("Payments:ExternalApiEnabled", false))
+            throw new InvalidOperationException("Payments__ExternalApiEnabled deve permanecer false enquanto o contrato esta pendente.");
+        if (configuration.GetValue("Payments:ExternalWebhookEnabled", false))
+            throw new InvalidOperationException("Payments__ExternalWebhookEnabled deve permanecer false enquanto o contrato esta pendente.");
+        if (!string.Equals(configuration["Payments:ContractStatus"], "Pending", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Payments__ContractStatus=Pending deve ser usado nesta versao.");
         if (configuration.GetValue("Messaging:Sqs:ConsumerConcurrency", 1) != 1)
             throw new InvalidOperationException("Consumer concurrency deve ser igual a 1.");
         if (configuration.GetValue("Messaging:Sqs:MaxMessagesPerReceive", 1) != 1)

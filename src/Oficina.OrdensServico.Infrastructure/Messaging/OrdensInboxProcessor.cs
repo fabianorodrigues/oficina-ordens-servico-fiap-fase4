@@ -14,6 +14,7 @@ internal sealed class OrdensInboxProcessor(
     IServiceScopeFactory scopes,
     IAmazonSQS sqs,
     Microsoft.Extensions.Options.IOptions<SqsMessagingOptions> options,
+    IPagamentoGateway pagamentoGateway,
     ILogger<OrdensInboxProcessor> logger) : SqsBackgroundService(logger)
 {
     protected override async Task ExecuteOnce(CancellationToken ct)
@@ -39,7 +40,7 @@ internal sealed class OrdensInboxProcessor(
         try
         {
             var envelope = MessageJson.ParseAndValidate(inbox.Body);
-            await ProcessarEventoEstoque(db, inbox, envelope, ct);
+            await ProcessarEventoEstoque(db, pagamentoGateway, inbox, envelope, ct);
 
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
@@ -74,7 +75,7 @@ internal sealed class OrdensInboxProcessor(
         }, ct);
     }
 
-    private static async Task ProcessarEventoEstoque(OrdensServicoDbContext db, InboxMessage inbox, MessageEnvelope envelope, CancellationToken ct)
+    private static async Task ProcessarEventoEstoque(OrdensServicoDbContext db, IPagamentoGateway pagamentoGateway, InboxMessage inbox, MessageEnvelope envelope, CancellationToken ct)
     {
         var saga = await db.SagasOrdensServico.FirstOrDefaultAsync(x => x.OrdemServicoId == inbox.OrdemServicoId, ct);
         if (saga is null)
@@ -107,6 +108,31 @@ internal sealed class OrdensInboxProcessor(
             var previousState = saga.Status;
             saga.ReservaRecusada(payload.Motivo);
             db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, inbox.MessageType, inbox.MessageId.ToString(), payload.Codigo));
+            var pagamento = await db.Pagamentos.FirstOrDefaultAsync(x => x.OrdemServicoId == inbox.OrdemServicoId, ct)
+                ?? throw new InvalidOperationException("Pagamento inexistente para compensacao.");
+            if (pagamento.Status == StatusPagamentoOrdem.Aprovado)
+            {
+                previousState = saga.Status;
+                saga.CompensacaoPendente();
+                db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, "PagamentoCompensacaoSolicitada", inbox.MessageId.ToString(), "Compensacao de pagamento solicitada apos recusa de reserva."));
+                var result = await pagamentoGateway.Compensar(new PagamentoCompensacaoRequest(
+                    inbox.OrdemServicoId,
+                    pagamento.Id,
+                    $"{pagamento.ChaveIdempotencia}:compensacao",
+                    inbox.CorrelationId), ct);
+                previousState = saga.Status;
+                if (result.Succeeded)
+                {
+                    pagamento.MarcarCompensado(result.CompensacaoExternaId ?? $"mock-compensation-{pagamento.Id:N}");
+                    saga.Compensada();
+                    db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, "PagamentoCompensado", inbox.MessageId.ToString(), "Compensacao de pagamento concluida."));
+                }
+                else
+                {
+                    saga.CompensacaoFalhou(result.Motivo ?? "Compensacao de pagamento falhou.");
+                    db.SagaSnapshots.Add(new SagaSnapshot(saga.Id, inbox.OrdemServicoId, previousState, saga.Status, "PagamentoCompensacaoFalhou", inbox.MessageId.ToString(), result.Motivo));
+                }
+            }
             inbox.MarkProcessed();
             return;
         }

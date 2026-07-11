@@ -26,7 +26,13 @@ Aprovar um orcamento inicia um fluxo assincrono: pagamento (mock ou API real via
 
 Autenticacao em ambiente local via header scheme (`Authentication:Mode=Development`), bloqueada fora de `Development`.
 
-Na Etapa 12, o modo oficial de publicacao usa `ASPNETCORE_ENVIRONMENT=Production` e exige `Payments:UseMock=true` com provider `Mock`. A integracao real com Mercado Pago, webhook e auditoria NoSQL ficam para etapa posterior.
+Na Etapa 15, o modo oficial de publicacao usa `ASPNETCORE_ENVIRONMENT=Production` e exige `Payments:UseMock=true`, `Payments:MockBehavior=Approved`, `Payments:ExternalApiEnabled=false`, `Payments:ExternalWebhookEnabled=false` e `Payments:ContractStatus=Pending`. A integracao real com a API externa de Pagamentos permanece pendente de contrato.
+
+## Pagamentos
+
+O fluxo atual usa `MockPagamentoGateway` por meio de `IPagamentoGateway`. O mock e deterministico, retorna aprovacao com referencia `mock-<chave-idempotencia>` e suporta compensacao idempotente com referencia `mock-compensation-<paymentOperationId>`.
+
+O codigo tambem prepara `ExternalPaymentApiGateway`, `IExternalPaymentContractMapper`, `IPaymentWebhookAuthenticator` e `IPaymentWebhookHandler`. Enquanto o contrato externo estiver pendente, o mapper e o autenticador concretos permanecem em modo `Pending` e a rota `POST /api/webhooks/payments` retorna `404` quando `ExternalWebhookEnabled=false`.
 
 ## Publicacao EKS preparada
 

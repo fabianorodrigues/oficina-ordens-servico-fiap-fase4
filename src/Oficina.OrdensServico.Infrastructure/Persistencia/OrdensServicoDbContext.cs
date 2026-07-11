@@ -124,7 +124,10 @@ public sealed class OrdensServicoDbContext(DbContextOptions<OrdensServicoDbConte
             e.ToTable("Pagamentos");
             e.HasKey(x => x.Id);
             e.Property(x => x.ChaveIdempotencia).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Provider).HasMaxLength(80).IsRequired();
+            e.Property(x => x.OperationType).HasMaxLength(80).IsRequired();
             e.Property(x => x.PagamentoExternoId).HasMaxLength(120);
+            e.Property(x => x.CompensacaoExternaId).HasMaxLength(120);
             e.Property(x => x.Status).HasConversion<int>().IsRequired();
             e.Property(x => x.LockedBy).HasMaxLength(120);
             e.Property(x => x.LastError).HasMaxLength(500);

@@ -31,7 +31,9 @@ jobs:
 
       - name: Validate official config
         shell: pwsh
-        run: ./scripts/validate-official-config.ps1
+        run: |
+          ./scripts/validate-official-config.ps1
+          ./scripts/validate-payment-integration.ps1
 
       - name: Validate region
         run: test -n "${{ vars.AWS_REGION }}"
@@ -129,6 +131,10 @@ jobs:
             echo "Cluster: ${{ steps.meta.outputs.cluster }}"
             echo "Namespace: oficina"
             echo "Payment provider: Mock"
+            echo "Mock behavior: Approved"
+            echo "External API: Disabled"
+            echo "External webhook: Disabled"
+            echo "Contract: Pending"
             echo "Health: /health"
             echo "Readiness: /ready"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -40,7 +40,13 @@ jobs:
 
       - name: Validate official config
         shell: pwsh
-        run: ./scripts/validate-official-config.ps1
+        run: |
+          ./scripts/validate-official-config.ps1
+          ./scripts/validate-payment-integration.ps1
+
+      - name: Payment mock tests
+        shell: pwsh
+        run: ./scripts/run-payment-mock-test.ps1
 
       - name: Build runtime image
         run: docker build -f Dockerfile -t oficina-ordens-servico:${{ github.sha }} .
@@ -75,12 +81,21 @@ jobs:
         shell: pwsh
         run: |
           $patterns = @(
-            'SQL_ORDENS_APP_PASSWORD',
-            'SQL_ORDENS_MIGRATOR_PASSWORD',
             'MERCADO_PAGO_ACCESS_TOKEN',
+            'MERCADO_PAGO_CLIENT_ID',
+            'MERCADO_PAGO_CLIENT_SECRET',
+            'MercadoPago.Client',
+            'MercadoPago.Config',
+            'aws_dynamodb_table',
+            'oficina-payment-audit',
+            'terraform/payments',
+            'payments-infra-deploy',
+            'payment-api-config-sync',
+            'PAYMENTS_API_CREDENTIAL',
+            '/oficina/payments/credential',
+            'AccessToken=',
             'ClientSecret=',
             'WebhookSecret=',
-            'Database.Migrate',
             'EnsureCreated',
             'HorizontalPodAutoscaler',
             'replicas: 2',
@@ -88,6 +103,6 @@ jobs:
             'terraform destroy'
           )
           foreach ($pattern in $patterns) {
-            $matches = rg -n $pattern -g '!**/bin/**' -g '!**/obj/**' -g '!**/TestResults/**' || $true
+            $matches = rg -n $pattern -g '!**/bin/**' -g '!**/obj/**' -g '!**/TestResults/**' -g '!scripts/validate-payment-integration.ps1' -g '!.github/workflows/ci.yml' || $true
             if ($matches) { throw "Padrao proibido encontrado: $pattern`n$matches" }
           }

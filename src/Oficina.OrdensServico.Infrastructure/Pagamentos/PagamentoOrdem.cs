@@ -7,7 +7,8 @@ public enum StatusPagamentoOrdem
     Pendente = 1,
     Aprovado = 2,
     Recusado = 3,
-    Falhou = 4
+    Falhou = 4,
+    Compensado = 5
 }
 
 public sealed class PagamentoOrdem : Entidade
@@ -20,6 +21,7 @@ public sealed class PagamentoOrdem : Entidade
         if (string.IsNullOrWhiteSpace(chaveIdempotencia)) throw new ArgumentException("Chave de idempotencia invalida.");
         OrdemServicoId = ordemServicoId;
         ChaveIdempotencia = chaveIdempotencia;
+        Provider = "Mock";
         Status = StatusPagamentoOrdem.Pendente;
         CreatedAtUtc = UpdatedAtUtc = DateTimeOffset.UtcNow;
     }
@@ -27,7 +29,11 @@ public sealed class PagamentoOrdem : Entidade
     public Guid OrdemServicoId { get; private set; }
     public string? PagamentoExternoId { get; private set; }
     public string ChaveIdempotencia { get; private set; } = string.Empty;
+    public string Provider { get; private set; } = "Mock";
     public StatusPagamentoOrdem Status { get; private set; }
+    public string OperationType { get; private set; } = "Payment";
+    public string? CompensacaoExternaId { get; private set; }
+    public DateTimeOffset? CompensatedAtUtc { get; private set; }
     public int AttemptCount { get; private set; }
     public DateTimeOffset? NextAttemptAtUtc { get; private set; }
     public DateTimeOffset? LockedUntilUtc { get; private set; }
@@ -53,6 +59,7 @@ public sealed class PagamentoOrdem : Entidade
     public void MarcarAprovado(string pagamentoExternoId)
     {
         Status = StatusPagamentoOrdem.Aprovado;
+        Provider = pagamentoExternoId.StartsWith("mock-", StringComparison.OrdinalIgnoreCase) ? "Mock" : "ExternalPaymentApi";
         PagamentoExternoId = pagamentoExternoId;
         LimparLock();
     }
@@ -62,6 +69,18 @@ public sealed class PagamentoOrdem : Entidade
         Status = StatusPagamentoOrdem.Recusado;
         PagamentoExternoId = pagamentoExternoId;
         LastError = Sanitizar(motivo);
+        LimparLock();
+    }
+
+    public void MarcarCompensado(string compensacaoExternaId)
+    {
+        if (Status == StatusPagamentoOrdem.Compensado)
+            return;
+
+        Status = StatusPagamentoOrdem.Compensado;
+        OperationType = "Compensation";
+        CompensacaoExternaId = compensacaoExternaId;
+        CompensatedAtUtc = DateTimeOffset.UtcNow;
         LimparLock();
     }
 

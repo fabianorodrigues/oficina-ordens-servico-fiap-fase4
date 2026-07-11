@@ -21,6 +21,18 @@ public sealed class PublicContractsTests
     }
 
     [Fact]
+    public void Webhook_pagamentos_e_anonimo_e_fica_em_rota_dedicada()
+    {
+        Assert.Equal("api/webhooks/payments", typeof(PaymentWebhooksController)
+            .GetCustomAttributes(typeof(RouteAttribute), false)
+            .Cast<RouteAttribute>()
+            .Single()
+            .Template);
+        Assert.NotEmpty(typeof(PaymentWebhooksController).GetCustomAttributes(typeof(AllowAnonymousAttribute), false));
+        Assert.Empty(typeof(PaymentWebhooksController).GetCustomAttributes(typeof(AuthorizeAttribute), false));
+    }
+
+    [Fact]
     public void Request_de_abertura_preserva_shape_estavel()
     {
         var req = new AbrirOrdemServicoRequest();
