@@ -1,5 +1,7 @@
 param([switch]$Force)
 
+$ErrorActionPreference = 'Stop'
+
 $root = Split-Path -Parent $PSScriptRoot
 $envFile = Join-Path $root ".env.local"
 $example = Join-Path $root ".env.local.example"

@@ -1,5 +1,7 @@
 param([string]$Service)
 
+$ErrorActionPreference = 'Stop'
+
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 if ([string]::IsNullOrWhiteSpace($Service)) {

@@ -1,6 +1,8 @@
 # oficina-ordens-servico-fiap-fase4
 
-Microsservico responsavel pela abertura, diagnostico, orcamento e execucao de ordens de servico da Oficina, orquestrando a integracao com Cadastro, Estoque e o provedor de pagamentos.
+## Responsabilidade
+
+Microsservico responsavel pela abertura, diagnostico, orcamento e execucao de ordens de servico da Oficina, orquestrando a integracao com Cadastro, Estoque e o provedor de pagamentos. Independente dos demais microsservicos: CI, deploy e banco lógico (`OficinaOrdensServicoDb`) próprios. Ponto de entrada da solução: [oficina-infra-fiap-fase4](../oficina-infra-fiap-fase4/README.md).
 
 ## Arquitetura
 
@@ -33,6 +35,14 @@ Na Etapa 15, o modo oficial de publicacao usa `ASPNETCORE_ENVIRONMENT=Production
 O fluxo atual usa `MockPagamentoGateway` por meio de `IPagamentoGateway`. O mock e deterministico, retorna aprovacao com referencia `mock-<chave-idempotencia>` e suporta compensacao idempotente com referencia `mock-compensation-<paymentOperationId>`.
 
 O codigo tambem prepara `ExternalPaymentApiGateway`, `IExternalPaymentContractMapper`, `IPaymentWebhookAuthenticator` e `IPaymentWebhookHandler`. Enquanto o contrato externo estiver pendente, o mapper e o autenticador concretos permanecem em modo `Pending` e a rota `POST /api/webhooks/payments` retorna `404` quando `ExternalWebhookEnabled=false`.
+
+```text
+Ordens -> API externa de pagamentos do grupo -> Mercado Pago
+```
+
+A integração externa real será implementada quando o contrato da API de
+pagamentos estiver disponível. Nenhum payload externo foi inventado e nenhuma
+integração direta com Mercado Pago existe nesta solução.
 
 ## Publicacao EKS preparada
 
@@ -69,7 +79,7 @@ Execucao futura:
 GitHub -> Actions -> Ordens Deploy -> Run workflow -> main -> DEPLOY
 ```
 
-Validacoes AWS pendentes ate o acesso AWS Academy voltar: STS, SSM real, ECR real, Secrets Manager metadata, SQS real, redrive policies, Pod Identity/IRSA, CSI/ASCP, push de imagens, Migration Job, migration real, deployment EKS, consumer SQS real, Outbox real distribuido, compensacao real entre servicos, DLQ real, health/readiness no cluster e smoke test.
+Validacoes AWS pendentes ate credenciais AWS estarem configuradas: STS, SSM real, ECR real, Secrets Manager metadata, SQS real, redrive policies, Pod Identity/IRSA, CSI/ASCP, push de imagens, Migration Job, migration real, deployment EKS, consumer SQS real, Outbox real distribuido, compensacao real entre servicos, DLQ real, health/readiness no cluster e smoke test.
 
 ## CI/CD
 
@@ -103,3 +113,19 @@ dotnet test
 ```
 
 Os testes end-to-end (`Oficina.EndToEndTests`) exigem o ambiente Docker Compose ativo e a variavel `RUN_E2E=true`; rodam via `docker compose --profile tests run --rm e2e-tests`.
+
+## Testes E2E (workflow)
+
+O workflow manual `E2E Validate` (`workflow_dispatch`, confirmation `VALIDATE`)
+sobe a mesma stack Docker Compose em CI, com Cadastro e Estoque publicados
+(checkout) como repositórios irmãos, e executa o fluxo completo: orçamento
+aprovado até a entrega com Saga concluída, saldo insuficiente, pagamento
+recusado com compensação e mensagem fora de ordem. Nenhum recurso AWS real é
+acessado; LocalStack simula SQS e o SQL Server roda em container local.
+
+## Próximo componente
+
+Ordens de Serviço é implantado de forma independente após Cadastro e Estoque
+(consumidos via HTTP interno e SQS) e após as dependências compartilhadas
+(Infra DB, Platform, Auth). É o último microsserviço antes do
+[Entrypoint Deploy](../oficina-infra-fiap-fase4/README.md#ordem-de-provisionamento).
