@@ -37,7 +37,7 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-builder.Services.AddDevelopmentAuthentication(builder.Configuration, builder.Environment);
+builder.Services.AddOficinaAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddAuthorization(options =>
 {
     options.FallbackPolicy = new AuthorizationPolicyBuilder()

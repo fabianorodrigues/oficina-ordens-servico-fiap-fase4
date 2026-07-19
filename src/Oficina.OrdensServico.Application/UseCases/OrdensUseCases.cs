@@ -72,6 +72,30 @@ public sealed class OrdensUseCases(IOrdensServicoRepository repo, ICadastroClien
     public async Task Finalizar(Guid id, CancellationToken ct) { var os = await ObterOs(id, ct); os.Finalizar(); await repo.Salvar(ct); }
     public async Task Entregar(Guid id, CancellationToken ct) { var os = await ObterOs(id, ct); os.MarcarEntregue(); await repo.Salvar(ct); }
 
+    public async Task<OrdemServicoDetalheResponse> ObterDoCliente(Guid id, Guid clienteId, CancellationToken ct)
+        => Map(await ObterOsDoCliente(id, clienteId, ct), await repo.ObterOrcamentoPorOs(id, ct));
+
+    public async Task<StatusOrdemServicoResponse> StatusDoCliente(Guid id, Guid clienteId, CancellationToken ct)
+    {
+        var os = await ObterOsDoCliente(id, clienteId, ct);
+        return new(os.Id, os.Status.ToString(), os.TipoManutencao.ToString(), os.DataUltimaAtualizacaoStatus);
+    }
+
+    public async Task<OrcamentoDetalheResponse> ObterOrcamentoDoCliente(Guid id, Guid clienteId, CancellationToken ct)
+        => MapOrc(await ObterOrcDoCliente(id, clienteId, ct));
+
+    public async Task AprovarOrcamentoDoCliente(Guid id, Guid clienteId, CancellationToken ct)
+    {
+        await ObterOrcDoCliente(id, clienteId, ct);
+        await AprovarOrcamento(id, ct);
+    }
+
+    public async Task RecusarOrcamentoDoCliente(Guid id, Guid clienteId, CancellationToken ct)
+    {
+        await ObterOrcDoCliente(id, clienteId, ct);
+        await RecusarOrcamento(id, ct);
+    }
+
     public async Task<OrcamentoDetalheResponse> ObterOrcamento(Guid id, CancellationToken ct) => MapOrc(await ObterOrc(id, ct));
 
     public async Task AprovarOrcamento(Guid id, CancellationToken ct)
@@ -143,6 +167,22 @@ public sealed class OrdensUseCases(IOrdensServicoRepository repo, ICadastroClien
 
     private async Task<OrdemServico> ObterOs(Guid id, CancellationToken ct) => await repo.ObterOrdemServico(id, ct) ?? throw new OrdensException("Ordem de servico nao encontrada.", 404);
     private async Task<Orcamento> ObterOrc(Guid id, CancellationToken ct) => await repo.ObterOrcamento(id, ct) ?? throw new OrdensException("Orcamento nao encontrado.", 404);
+
+    // Recurso de outro cliente responde como inexistente, para nao revelar sua existencia.
+    private async Task<OrdemServico> ObterOsDoCliente(Guid id, Guid clienteId, CancellationToken ct)
+    {
+        var os = await ObterOs(id, ct);
+        if (os.ClienteId != clienteId) throw new OrdensException("Ordem de servico nao encontrada.", 404);
+        return os;
+    }
+
+    private async Task<Orcamento> ObterOrcDoCliente(Guid id, Guid clienteId, CancellationToken ct)
+    {
+        var orc = await ObterOrc(id, ct);
+        var os = await ObterOs(orc.OrdemServicoId, ct);
+        if (os.ClienteId != clienteId) throw new OrdensException("Orcamento nao encontrado.", 404);
+        return orc;
+    }
     private static TipoManutencao ParseTipo(string? tipo) => string.IsNullOrWhiteSpace(tipo) ? TipoManutencao.NaoClassificada : Enum.TryParse<TipoManutencao>(tipo, true, out var v) ? v : throw new OrdensException("Tipo de manutencao invalido.", 400);
     private static SnapshotCliente Snap(ClienteDto c) => new(c.Id, c.Nome, c.Documento, c.Email, c.Telefone);
     private static SnapshotVeiculo Snap(VeiculoDto v) => new(v.Id, v.Placa, v.Renavam, v.ModeloDescricao, v.ModeloMarca, v.ModeloAno);

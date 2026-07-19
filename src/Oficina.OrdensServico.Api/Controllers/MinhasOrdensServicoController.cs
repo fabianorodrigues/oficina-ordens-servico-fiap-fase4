@@ -15,14 +15,14 @@ public class MinhasOrdensServicoController(OrdensUseCases useCases) : Controller
     public async Task<IActionResult> Listar(CancellationToken ct) => Ok(await useCases.ListarMinhas(ClienteId(), ct));
 
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> Obter(Guid id, CancellationToken ct) => Ok(await useCases.Obter(id, ct));
+    public async Task<IActionResult> Obter(Guid id, CancellationToken ct) => Ok(await useCases.ObterDoCliente(id, ClienteId(), ct));
 
     [HttpGet("{id:guid}/status")]
-    public async Task<IActionResult> ObterStatus(Guid id, CancellationToken ct) => Ok(await useCases.Status(id, ct));
+    public async Task<IActionResult> ObterStatus(Guid id, CancellationToken ct) => Ok(await useCases.StatusDoCliente(id, ClienteId(), ct));
 
     private Guid ClienteId()
     {
-        var value = User.FindFirst("clienteId")?.Value ?? Request.Headers["X-Dev-ClienteId"].FirstOrDefault();
+        var value = User.FindFirst("clienteId")?.Value;
         return Guid.TryParse(value, out var id) ? id : throw new OrdensException("Cliente autenticado invalido.", 401);
     }
 }

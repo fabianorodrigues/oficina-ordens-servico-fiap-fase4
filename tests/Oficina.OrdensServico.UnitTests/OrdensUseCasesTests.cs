@@ -66,6 +66,41 @@ public sealed class OrdensUseCasesTests
     }
 
     [Fact]
+    public async Task Cliente_nao_acessa_ordem_de_outro_cliente()
+    {
+        var repo = new FakeRepo();
+        var cadastro = new FakeCadastro();
+        var use = Criar(repo, cadastro, new FakeEstoque());
+        var result = await use.Abrir(Request(), CancellationToken.None);
+
+        var proprio = await use.ObterDoCliente(result.Id, cadastro.ClienteId, CancellationToken.None);
+        Assert.Equal(result.Id, proprio.Id);
+
+        var ex = await Assert.ThrowsAsync<OrdensException>(
+            () => use.ObterDoCliente(result.Id, Guid.NewGuid(), CancellationToken.None));
+
+        Assert.Equal(404, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task Cliente_nao_acessa_orcamento_de_outro_cliente()
+    {
+        var repo = new FakeRepo();
+        var cadastro = new FakeCadastro();
+        var use = Criar(repo, cadastro, new FakeEstoque());
+        await use.Abrir(Request(), CancellationToken.None);
+        var orcamentoId = repo.Orcamentos.Single().Id;
+
+        var proprio = await use.ObterOrcamentoDoCliente(orcamentoId, cadastro.ClienteId, CancellationToken.None);
+        Assert.Equal(orcamentoId, proprio.Id);
+
+        var ex = await Assert.ThrowsAsync<OrdensException>(
+            () => use.ObterOrcamentoDoCliente(orcamentoId, Guid.NewGuid(), CancellationToken.None));
+
+        Assert.Equal(404, ex.StatusCode);
+    }
+
+    [Fact]
     public async Task Snapshots_locais_nao_mudam_apos_alteracao_remota()
     {
         var repo = new FakeRepo();

@@ -12,7 +12,7 @@ public static class DevelopmentAuthenticationDefaults
 
 public static class DevelopmentAuthenticationRegistration
 {
-    public static IServiceCollection AddDevelopmentAuthentication(
+    public static IServiceCollection AddOficinaAuthentication(
         this IServiceCollection services,
         IConfiguration configuration,
         IWebHostEnvironment environment)
@@ -25,22 +25,21 @@ public static class DevelopmentAuthenticationRegistration
             throw new InvalidOperationException("Authentication__Mode=Development is allowed only when ASPNETCORE_ENVIRONMENT=Development.");
         }
 
-        if (!environment.IsDevelopment())
+        if (isDevelopmentMode)
         {
-            services.AddAuthentication();
-            return services;
-        }
+            services
+                .AddAuthentication(DevelopmentAuthenticationDefaults.Scheme)
+                .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(
+                    DevelopmentAuthenticationDefaults.Scheme,
+                    _ => { });
 
-        if (!isDevelopmentMode)
-        {
-            services.AddAuthentication();
             return services;
         }
 
         services
-            .AddAuthentication(DevelopmentAuthenticationDefaults.Scheme)
-            .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(
-                DevelopmentAuthenticationDefaults.Scheme,
+            .AddAuthentication(TrustedIdentityAuthenticationDefaults.Scheme)
+            .AddScheme<AuthenticationSchemeOptions, TrustedIdentityAuthenticationHandler>(
+                TrustedIdentityAuthenticationDefaults.Scheme,
                 _ => { });
 
         return services;

@@ -1,123 +1,319 @@
-# oficina-ordens-servico-fiap-fase4
+# oficina-ordens-servico
+
+> Microsserviço de ordens de serviço, orçamento e saga de pagamento da Oficina.
+> **.NET 10** · **ASP.NET Core** · **EF Core / SQL Server** · **SQS FIFO** · **EKS** · **Docker Compose**
+
+---
+
+## A solução
+
+A **Oficina** é uma plataforma de gestão de oficina mecânica distribuída em **6 repositórios** que compõem um único sistema na AWS. O cliente acessa uma API Gateway que autentica na borda e encaminha o tráfego para três microsserviços .NET 10 em EKS, que se comunicam por HTTP e por filas SQS FIFO e persistem em um RDS SQL Server compartilhado.
+
+| Repositório | Responsabilidade |
+|---|---|
+| [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4) | Rede, banco de dados, segredos e estado do Terraform |
+| [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4) | Plataforma EKS e entrypoint de API |
+| [oficina-auth-lambda](https://github.com/fabianorodrigues/oficina-auth-lambda-fiap-fase4) | Autenticação por CPF e emissão de token |
+| [oficina-cadastro](https://github.com/fabianorodrigues/oficina-cadastro-fiap-fase4) | Clientes, veículos, funcionários e catálogo de serviços |
+| [oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4) | Peças, insumos, saldos e reservas |
+| **oficina-ordens-servico** *(este)* | Ordens de serviço, orçamento e saga de pagamento |
+
+---
+
+## Ordem de deploy
+
+| # | Repositório | Workflow | Confirmação |
+|---|---|---|---|
+| 1 | oficina-infra-db | Database Infrastructure Deploy | `APPLY` |
+| 2 | oficina-infra | Platform Deploy | `APPLY` |
+| 3 | oficina-infra-db | Database Bootstrap | `BOOTSTRAP` |
+| 4 | oficina-auth-lambda | Auth Deploy | `DEPLOY` |
+| **5** | cadastro · estoque · **oficina-ordens-servico** | **Deploy** | `DEPLOY` |
+| 6 | oficina-infra | Entrypoint Deploy | `APPLY` |
+| 7 | oficina-infra | Observability Validate | `VALIDATE` |
+| **8** | **oficina-ordens-servico** | **AWS E2E Validate** | `VALIDATE` |
+
+> Este repositório aparece na **etapa 5**, junto aos outros dois serviços, e **encerra a sequência na etapa 8** com a validação funcional de ponta a ponta.
+>
+> É também o **hub de execução local**: o arquivo de composição daqui sobe os três serviços, o banco e as filas emuladas.
+
+---
 
 ## Responsabilidade
 
-Microsservico responsavel pela abertura, diagnostico, orcamento e execucao de ordens de servico da Oficina, orquestrando a integracao com Cadastro, Estoque e o provedor de pagamentos. Independente dos demais microsservicos: CI, deploy e banco lÃ³gico (`OficinaOrdensServicoDb`) prÃ³prios. Ponto de entrada da soluÃ§Ã£o: [oficina-infra-fiap-fase4](../oficina-infra-fiap-fase4/README.md).
+Orquestra o ciclo de vida da ordem de serviço e é o único serviço que coordena os demais:
+
+- **Ordens de serviço** — abertura, classificação, diagnóstico, execução, finalização e entrega.
+- **Orçamento** — geração a partir do diagnóstico, com aprovação ou recusa pelo funcionário ou pelo próprio cliente.
+- **Saga distribuída** — coordena pagamento e reserva de material, com compensação quando a reserva é recusada.
+- **Relatórios** — tempo médio de execução.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Recebida
+    Recebida --> EmDiagnostico: classificar
+    EmDiagnostico --> AguardandoAprovacao: diagnóstico gera orçamento
+    AguardandoAprovacao --> EmExecucao: orçamento aprovado
+    AguardandoAprovacao --> [*]: orçamento recusado
+    EmExecucao --> Finalizada: finalizar
+    Finalizada --> Entregue: entregar
+    Entregue --> [*]
+```
+
+---
 
 ## Arquitetura
 
-Clean Architecture com 4 camadas:
+A aprovação do orçamento dispara a saga, que trata pagamento e reserva de material como uma transação distribuída com compensação.
 
-- `Oficina.OrdensServico.Domain` â€” entidades e agregados (`OrdemServico`, `Orcamento`); sem dependencias externas.
-- `Oficina.OrdensServico.Application` â€” casos de uso (`OrdensUseCases`), contratos (`Contracts/`), abstracoes (`Abstractions/`) e validators.
-- `Oficina.OrdensServico.Infrastructure` â€” persistencia EF Core, clients HTTP para Cadastro/Estoque, mensageria SQS (Inbox/Outbox) e a saga de pagamento/reserva (`Pagamentos/`).
-- `Oficina.OrdensServico.Api` â€” controllers, autenticacao/autorizacao, middlewares e composition root (`Program.cs`).
+```mermaid
+stateDiagram-v2
+    [*] --> PagamentoPendente: orçamento aprovado
+    PagamentoPendente --> PagamentoAprovado
+    PagamentoAprovado --> ReservaPendente: comando ao estoque
+    ReservaPendente --> Reservada: estoque reservado
+    Reservada --> Concluida
 
-## Endpoints principais
+    ReservaPendente --> ReservaRecusada: sem material
+    ReservaRecusada --> CompensacaoPendente: estornar pagamento
+    CompensacaoPendente --> Compensada
+    CompensacaoPendente --> CompensacaoFalhou: requer intervenção
+```
 
-- `api/ordens-servico` â€” abertura, classificacao, diagnostico, status e ciclo de vida da ordem.
-- `api/orcamentos` e `api/meus-orcamentos` â€” aprovacao/recusa de orcamentos (funcionario e cliente).
-- `api/minhas-ordens-servico` â€” consulta pelo proprio cliente.
-- `api/orcamentos/acoes-externas` â€” aprovacao/recusa via link enviado ao cliente (anonimo, por token).
-- `api/relatorios` â€” tempo medio de execucao.
-- `api/dev/ordens-servico/{id}/forcar-compensacao` e `/reprocessar-reserva` â€” apenas em `Development`, para operar a saga manualmente.
+O serviço fala com os demais de duas formas:
 
-## Fluxo distribuido (Saga)
+```mermaid
+flowchart LR
+    subgraph Ordens["oficina-ordens-servico"]
+        direction TB
+        API["API de ordens e orçamentos"]
+        Saga["Coordenador da saga"]
+        Msg["Caixa de entrada e de saída"]
+        API --> Saga --> Msg
+    end
 
-Aprovar um orcamento inicia um fluxo assincrono: pagamento mock aprovado processado por um `BackgroundService`, seguido de reserva de materiais no Estoque via SQS (Outbox local, Inbox no consumidor), com compensacao automatica em caso de recusa. Controlado por `DistributedFlow:Enabled`.
+    Ordens -->|"HTTP interno"| Cadastro["oficina-cadastro<br/>cliente, veículo, serviços"]
+    Ordens -->|"HTTP interno"| Estoque["oficina-estoque<br/>disponibilidade"]
+    Msg -->|"comandos"| FC["Fila de comandos"]
+    FE["Fila de eventos"] --> Msg
+    FC --> Estoque
+    Estoque --> FE
+    Ordens --> DB[("OficinaOrdensServicoDb")]
+```
 
-Autenticacao em ambiente local via header scheme (`Authentication:Mode=Development`), bloqueada fora de `Development`.
+Clean Architecture com portas na camada de aplicação e adaptadores na infraestrutura: clientes HTTP tipados, mensageria e o processador de pagamento implementam interfaces definidas pelos casos de uso.
 
-O modo oficial de publicacao usa `ASPNETCORE_ENVIRONMENT=Production` e exige `Payments:UseMock=true`, `Payments:MockBehavior=Approved`, `Payments:ExternalApiEnabled=false`, `Payments:ExternalWebhookEnabled=false` e `Payments:ContractStatus=Pending`.
+---
+
+## Autenticação
+
+O token é validado pelo autorizador da API Gateway, que devolve as claims à borda. A API Gateway as converte em cabeçalhos de identidade (`x-oficina-user-id`, `x-oficina-user-cpf`, `x-oficina-user-role`, `x-oficina-user-name`) e os injeta na requisição encaminhada.
+
+Este serviço materializa esses cabeçalhos como claims e aplica as políticas de autorização por perfil. Requisição sem identidade válida é rejeitada pela política padrão; apenas `/health`, `/ready` e as ações externas de orçamento por token são anônimas.
+
+Dois pontos específicos deste serviço:
+
+- **Propagação entre serviços.** As chamadas às rotas internas de cadastro e estoque repassam os cabeçalhos de identidade recebidos, de modo que o serviço chamado autoriza em nome do mesmo usuário.
+- **Escopo do cliente.** As rotas de cliente derivam o solicitante exclusivamente da claim de identidade e verificam a propriedade do recurso. Ordem ou orçamento de outro cliente responde como inexistente, para não revelar sua existência.
+
+Os cabeçalhos são confiáveis porque o balanceador é interno e o acesso está restrito ao VPC Link — nenhum chamador externo alcança o serviço sem passar pela borda. Manter essa restrição é parte do modelo de segurança.
+
+No perfil de desenvolvimento, um modo alternativo aceita cabeçalhos `X-Dev-*` para simular perfil e usuário sem token. Ele **só é ativado em desenvolvimento**.
+
+---
+
+## Endpoints
+
+| Método | Rota | Perfil |
+|---|---|---|
+| `POST` `GET` | `/api/ordens-servico` | Funcionário ou administrador |
+| `GET` | `/api/ordens-servico/{id}` · `/{id}/status` | Funcionário ou administrador |
+| `POST` | `/api/ordens-servico/{id}/classificar` · `/diagnostico` | Funcionário ou administrador |
+| `POST` | `/api/ordens-servico/{id}/finalizar` · `/entregar` | Funcionário ou administrador |
+| `GET` | `/api/orcamentos/{id}` | Funcionário ou administrador |
+| `POST` | `/api/orcamentos/{id}/aprovar` · `/recusar` | Funcionário ou administrador |
+| `GET` `POST` | `/api/meus-orcamentos/...` | Cliente |
+| `GET` | `/api/minhas-ordens-servico/...` | Cliente |
+| `GET` | `/api/orcamentos/acoes-externas/aprovar` · `/recusar` | Anônimo, por token de uso único |
+| `GET` | `/api/relatorios/tempo-medio-execucao` | Funcionário ou administrador |
+| `POST` | `/api/webhooks/payments` | Anônimo — **desativado, responde não encontrado** |
+| `GET` | `/health` · `/ready` | Anônimo |
+
+As ações externas de orçamento permitem que o cliente aprove ou recuse por link, sem autenticar: o token é validado e distingue link inválido, expirado e ação já processada.
+
+> `/ready` neste serviço responde de forma estática e **não verifica a conexão com o banco**.
+
+---
 
 ## Pagamentos
 
-O fluxo atual usa `MockPagamentoGateway` por meio de `IPagamentoGateway`. O mock e deterministico, retorna aprovacao com referencia `mock-<chave-idempotencia>` e suporta compensacao idempotente com referencia `mock-compensation-<paymentOperationId>`.
+O provedor de pagamento é **um mock interno determinístico**, não uma integração externa:
 
-O codigo mantem pontos de extensao para pagamento externo, mas eles permanecem desabilitados nesta etapa. A rota `POST /api/webhooks/payments` retorna `404` quando `ExternalWebhookEnabled=false`.
+- O resultado é decidido pelo cenário configurado, fixado em aprovação no ambiente publicado.
+- A integração externa está **estruturalmente desativada**: a validação de inicialização interrompe a aplicação se alguém tentar habilitá-la, e o webhook responde não encontrado.
+- O deploy confere os sinalizadores no manifesto renderizado e falha se qualquer um deles estiver ligado.
 
-## Publicacao EKS preparada
+Foi uma decisão de escopo: a saga, a idempotência e a compensação são reais e exercitadas; apenas o provedor é simulado.
 
-Artefatos adicionados para publicacao independente:
+---
 
-- `config/official.json` com dados nao sensiveis da configuracao oficial.
-- `Dockerfile` para a imagem runtime sem SDK.
-- `Dockerfile.migration` para EF Migration Bundle.
-- `deploy/k8s/` com ServiceAccounts, SecretProviderClasses, ConfigMap, Service, Deployment `Recreate` com uma replica e Migration Job.
-- `scripts/validate-official-config.ps1`, `scripts/render-k8s-manifests.ps1`, `scripts/validate-ordens-deployment.ps1`, `scripts/smoke-test.ps1`, `scripts/aws-e2e-validate.ps1` e `scripts/run-saga-smoke-test.ps1`.
-- Workflows `Ordens CI`, `Ordens Deploy` e `AWS E2E Validate`.
+## Contrato de integração
 
-Banco oficial:
+### Consome
 
-- Database: `OficinaOrdensServicoDb`
-- Runtime user: `ordens_app`
-- Migration user: `ordens_migrator`
-- Secrets: `/oficina/ordens/runtime-db` e `/oficina/ordens/migration-db`
+| Valor | Origem | Criado por |
+|---|---|---|
+| Cluster e namespace | `/oficina/infra/cluster/{name,namespace}` | oficina-infra |
+| Registro de imagem | `/oficina/infra/ecr/ordens` | oficina-infra |
+| Filas de comandos e eventos | `/oficina/infra/sqs/...` (4 endereços) | oficina-infra |
+| Credenciais de banco | `/oficina/ordens/{runtime,migration}-db` | oficina-infra-db |
+| Rotas internas de cadastro e estoque | Serviços no cluster | cadastro, estoque |
 
-As senhas e connection strings nao sao versionadas neste repositorio. Em Production a connection string e lida via Secrets Store CSI em `/mnt/secrets-store` com `AddKeyPerFile`, usando a chave `ConnectionStrings__DefaultConnection`.
+### Publica
 
-Filas oficiais:
+Rotas HTTP no cluster, os comandos de reserva nas filas, e o esquema do banco de ordens, aplicado pelo Job de migração.
 
-- Comandos para Estoque: `oficina-estoque-comandos.fifo`
-- DLQ de comandos: `oficina-estoque-comandos-dlq.fifo`
-- Eventos para Ordens: `oficina-ordens-eventos.fifo`
-- DLQ de eventos: `oficina-ordens-eventos-dlq.fifo`
+---
 
-Decisoes preservadas: uma replica, strategy `Recreate`, consumer concurrency 1, sem HPA, Inbox, Outbox, Saga persistida, snapshots de Saga, compensacao e pagamento mock.
+## Configuração
 
-Execucao futura:
+Configure em **Settings → Secrets and variables → Actions** do repositório.
 
-```text
-GitHub -> Actions -> Ordens Deploy -> Run workflow -> main -> DEPLOY
+| Tipo | Nome | Obrigatório |
+|---|---|---|
+| Secret | `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` · `AWS_SESSION_TOKEN` | **Sim** |
+| Variable | `AWS_REGION` | **Sim** |
+
+Não há mais nada a configurar: cluster, registro de imagem, endereços das filas, credenciais e endereços dos serviços vizinhos vêm do que as etapas anteriores publicaram e do arquivo de configuração do repositório.
+
+### Variáveis de ambiente da aplicação
+
+| Chave | Valor no ambiente publicado |
+|---|---|
+| `ConnectionStrings__DefaultConnection` | Montada pelo CSI a partir do segredo |
+| `Integrations__Cadastro__BaseUrl` · `Integrations__Estoque__BaseUrl` | Endereços internos no cluster |
+| `Messaging__Sqs__Enabled` · `DistributedFlow__Enabled` | **Ativados** |
+| `Messaging__Sqs__*QueueUrl` | Os quatro endereços de fila, obrigatórios fora de desenvolvimento |
+| `Payments__UseMock` | **Ativado**, e obrigatório fora de desenvolvimento |
+| `Database__ApplyMigrations` | Desativado — migrações rodam em Job próprio |
+
+> **Atenção operacional:** os valores padrão do código deixam a mensageria e o fluxo distribuído **desativados**. Eles só são ligados pelo ConfigMap no cluster e pelo ambiente local. Executar a aplicação com `dotnet run` puro não exercita a saga.
+
+---
+
+## Executar pelo GitHub Actions
+
+### Ordens Deploy — etapa 5
+
+**Actions → Ordens Deploy → Run workflow → `confirmation` = `DEPLOY`**
+
+Roda apenas na branch `main`. Sequência: valida a requisição, a configuração e a integração de pagamentos → descobre cluster, registro de imagem e filas → confere que as quatro filas são FIFO → compila e testa → constrói as imagens → varredura de vulnerabilidades, que interrompe o deploy em achado alto ou crítico → envia ao registro → renderiza os manifestos → **confere os sinalizadores de pagamento no manifesto** → aplica → executa o Job de migração e aguarda → aplica o Deployment → teste de fumaça.
+
+### AWS E2E Validate — etapa 8
+
+**Actions → AWS E2E Validate → Run workflow → `confirmation` = `VALIDATE`**
+
+Executa o fluxo funcional contra o ambiente publicado: autentica, cadastra cliente e veículo, abre uma ordem, registra o diagnóstico, aprova o orçamento, acompanha a saga até a reserva de material e conclui a ordem. É a validação final da solução.
+
+Execute somente **após a etapa 6**; antes disso as rotas ainda não existem.
+
+---
+
+## Validar
+
+### Pelo Console AWS
+
+| Serviço | O que verificar |
+|---|---|
+| **ECR** | Repositório de ordens com a imagem do commit publicado |
+| **SQS** | Fila de eventos sendo consumida e **filas mortas vazias** |
+| **EKS → Recursos** | Deployment disponível e Job de migração concluído |
+
+### Pela CLI
+
+<details>
+<summary>Comandos de validação</summary>
+
+```bash
+REGIAO=<sua-regiao>
+CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name \
+  --region "$REGIAO" --query 'Parameter.Value' --output text)
+aws eks update-kubeconfig --name "$CLUSTER" --region "$REGIAO"
+
+kubectl get deployment,pod -n oficina -l app=oficina-ordens-servico
+kubectl logs -n oficina -l app=oficina-ordens-servico --tail=50
+
+kubectl port-forward -n oficina svc/oficina-ordens-servico 18080:80 &
+curl -s http://localhost:18080/health
 ```
 
-O deploy valida STS, SSM, ECR, Secrets Manager metadata com `AWSCURRENT`, SQS, Pod Identity/IRSA, CSI/ASCP, push de imagens, Migration Job, rollout, health/readiness no cluster, pagamento mock aprovado e configuracao externa de pagamentos desabilitada.
+</details>
 
-## CI/CD
+Após a **etapa 6**, a verificação de saúde também responde pela API pública, em `/health/ordens`.
 
-- CI principal: `Ordens CI`, executada em todo Pull Request para `main`.
-- Required check esperado na branch protection: `Ordens CI`.
-- Workflow manual: `Ordens Deploy`, executado somente por `workflow_dispatch` na `main`, com confirmation `DEPLOY`.
-- Workflow manual de validacao: `AWS E2E Validate`, executado somente por `workflow_dispatch` na `main`, com confirmation `VALIDATE`.
-- Repository Secrets usados pelo deploy: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.
-- Repository Variables usadas pelo deploy: `AWS_REGION`.
-- A CI nao recebe credenciais AWS, nao publica imagens e nao altera AWS ou Kubernetes.
-- O deploy valida configuracao oficial, pagamento mock aprovado, integracao externa desabilitada, webhook externo desabilitado, SSM, SQS, Secrets Manager por metadata, ECR, migration, rollout, health e readiness.
-- Nao existe pipeline dedicada de rollback ou destroy. Para corrigir uma entrega, reverta ou ajuste o codigo em nova branch, abra Pull Request, aguarde `Ordens CI`, faca merge na `main` e execute novamente `Ordens Deploy`.
-- Branch protection recomendada: Pull Request obrigatorio, required check `Ordens CI`, bloqueio de force push e bloqueio de delecao da branch. Segundo revisor nao e obrigatorio para execucao individual ou dupla.
+---
 
-## Ambiente local (Docker Compose)
+## Executar e validar localmente
 
-Este repositorio contem o `docker-compose.local.yml` que orquestra os tres servicos (Cadastro, Estoque, Ordens de Servico), SQL Server, LocalStack (SQS) e um mock de pagamentos (WireMock).
+Este repositório orquestra o **ambiente local completo da solução**: banco SQL Server, filas FIFO emuladas, um serviço de pagamento simulado e os três microsserviços, construídos a partir dos diretórios vizinhos.
 
-```powershell
-Copy-Item .env.local.example .env.local   # ou scripts/setup-local-env.ps1
-scripts/start-local.ps1
-scripts/status-local.ps1
-scripts/smoke-local.ps1
-scripts/stop-local.ps1
+**Pré-requisitos:** Docker, e os repositórios [oficina-cadastro](https://github.com/fabianorodrigues/oficina-cadastro-fiap-fase4) e [oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4) clonados **lado a lado** com este.
+
+```
+pasta-de-trabalho/
+├── oficina-cadastro-fiap-fase4/
+├── oficina-estoque-fiap-fase4/
+└── oficina-ordens-servico-fiap-fase4/   <- execute daqui
 ```
 
-## Build e testes locais
+```bash
+# 1. Gera o arquivo de ambiente com senhas locais
+pwsh ./scripts/setup-local-env.ps1
 
-```powershell
-dotnet build src\Oficina.OrdensServico.Api\Oficina.OrdensServico.Api.csproj
+# 2. Sobe banco, filas, serviço de pagamento simulado e os três serviços
+pwsh ./scripts/start-local.ps1
+
+# 3. Confere que tudo subiu
+pwsh ./scripts/status-local.ps1
+
+# 4. Valida as rotas e o fluxo de mensagens
+pwsh ./scripts/smoke-local.ps1
+pwsh ./scripts/smoke-sqs-local.ps1
+
+# 5. Exercita a saga de ponta a ponta
+pwsh ./scripts/run-saga-smoke-test.ps1
+
+# Logs e encerramento
+pwsh ./scripts/logs-local.ps1
+pwsh ./scripts/stop-local.ps1     # reset-local.ps1 apaga também os volumes
+```
+
+Os serviços sobem em portas locais distintas, definidas no arquivo de ambiente gerado no passo 1, e usam o modo de autenticação por cabeçalhos descrito em [Autenticação](#autenticação).
+
+### Testes
+
+```bash
+dotnet restore
+dotnet build -c Release
 dotnet test
 ```
 
-Os testes end-to-end (`Oficina.EndToEndTests`) exigem o ambiente Docker Compose ativo e a variavel `RUN_E2E=true`; rodam via `docker compose --profile tests run --rm e2e-tests`.
+A suíte de ponta a ponta é ignorada por padrão e só executa dentro do ambiente composto, por um perfil dedicado — o que significa que **ela não roda na integração contínua**.
 
-## Testes E2E (workflow)
+---
 
-O workflow manual `AWS E2E Validate` (`workflow_dispatch`, confirmation
-`VALIDATE`) resolve a URL da API via SSM, gera token bootstrap sem imprimir o
-`SigningKey`, cria dados sinteticos unicos, autentica pelo `/api/auth/cpf`,
-executa o fluxo principal na AWS e valida SQS, health endpoints e pagamento mock
-aprovado ate a ordem chegar em `EmExecucao`.
+## Limitações conhecidas
 
-## PrÃ³ximo componente
+- **Pagamento simulado.** Não há integração com provedor externo; o caminho externo é bloqueado por validação de inicialização.
+- **Réplica única, sem escala automática**, por decisão de projeto.
+- **Testes de ponta a ponta fora da integração contínua**, por dependerem do ambiente composto.
+- **Cobertura coletada mas sem limite mínimo.**
+- **Compensação sem reprocessamento automático.** Uma saga que chega ao estado de falha de compensação exige intervenção manual.
 
-Ordens de ServiÃ§o Ã© implantado de forma independente apÃ³s Cadastro e Estoque
-(consumidos via HTTP interno e SQS) e apÃ³s as dependÃªncias compartilhadas
-(Infra DB, Platform, Auth). Ã‰ o Ãºltimo microsserviÃ§o antes do
-[Entrypoint Deploy](../oficina-infra-fiap-fase4/README.md#ordem-de-provisionamento).
+---
+
+## Próxima etapa
+
+Este é o último repositório da sequência. Com a **etapa 8** concluída, a solução está publicada e validada de ponta a ponta.
+
+Para revisar a plataforma ou reexecutar as validações, volte a **[oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4)**.
