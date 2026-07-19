@@ -47,6 +47,7 @@ jobs:
         shell: pwsh
         run: >
           ./scripts/render-k8s-manifests.ps1
+          -OutputDirectory artifacts/k8s
           -RuntimeImage oficina-ordens-servico:${{ github.sha }}
           -MigrationImage oficina-ordens-servico:${{ github.sha }}-migration
           -AwsRegion us-east-1
@@ -54,7 +55,13 @@ jobs:
           -CommandsDlqUrl http://localhost:4566/000000000000/oficina-estoque-comandos-dlq.fifo
           -EventsQueueUrl http://localhost:4566/000000000000/oficina-ordens-eventos.fifo
           -EventsDlqUrl http://localhost:4566/000000000000/oficina-ordens-eventos-dlq.fifo
-          -MigrationJobName ordens-migration-ci
+          -MigrationJobName oficina-ordens-servico-migration-ci-1
+
+      - name: Kubeconform
+        uses: yannh/kubeconform-action@v0.4.0
+        with:
+          files: artifacts/k8s
+          strict: "true"
 
       - name: PowerShell AST
         shell: pwsh

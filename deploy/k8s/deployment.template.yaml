@@ -3,6 +3,9 @@ kind: Deployment
 metadata:
   name: oficina-ordens-servico
   namespace: oficina
+  labels:
+    app.kubernetes.io/name: oficina-ordens-servico
+    app.kubernetes.io/component: api
 spec:
   replicas: 1
   strategy:
@@ -15,9 +18,15 @@ spec:
     metadata:
       labels:
         app: oficina-ordens-servico
+        app.kubernetes.io/name: oficina-ordens-servico
+        app.kubernetes.io/component: api
     spec:
       serviceAccountName: ordens-runtime
       terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: api
           image: __RUNTIME_IMAGE__
@@ -48,6 +57,19 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 750m
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
       volumes:
         - name: secrets-store
           csi:

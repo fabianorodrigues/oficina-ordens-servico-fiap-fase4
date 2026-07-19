@@ -2,47 +2,39 @@
 
 ## Responsabilidade
 
-Microsservico responsavel pela abertura, diagnostico, orcamento e execucao de ordens de servico da Oficina, orquestrando a integracao com Cadastro, Estoque e o provedor de pagamentos. Independente dos demais microsservicos: CI, deploy e banco lógico (`OficinaOrdensServicoDb`) próprios. Ponto de entrada da solução: [oficina-infra-fiap-fase4](../oficina-infra-fiap-fase4/README.md).
+Microsservico responsavel pela abertura, diagnostico, orcamento e execucao de ordens de servico da Oficina, orquestrando a integracao com Cadastro, Estoque e o provedor de pagamentos. Independente dos demais microsservicos: CI, deploy e banco lÃ³gico (`OficinaOrdensServicoDb`) prÃ³prios. Ponto de entrada da soluÃ§Ã£o: [oficina-infra-fiap-fase4](../oficina-infra-fiap-fase4/README.md).
 
 ## Arquitetura
 
 Clean Architecture com 4 camadas:
 
-- `Oficina.OrdensServico.Domain` — entidades e agregados (`OrdemServico`, `Orcamento`); sem dependencias externas.
-- `Oficina.OrdensServico.Application` — casos de uso (`OrdensUseCases`), contratos (`Contracts/`), abstracoes (`Abstractions/`) e validators.
-- `Oficina.OrdensServico.Infrastructure` — persistencia EF Core, clients HTTP para Cadastro/Estoque, mensageria SQS (Inbox/Outbox) e a saga de pagamento/reserva (`Pagamentos/`).
-- `Oficina.OrdensServico.Api` — controllers, autenticacao/autorizacao, middlewares e composition root (`Program.cs`).
+- `Oficina.OrdensServico.Domain` â€” entidades e agregados (`OrdemServico`, `Orcamento`); sem dependencias externas.
+- `Oficina.OrdensServico.Application` â€” casos de uso (`OrdensUseCases`), contratos (`Contracts/`), abstracoes (`Abstractions/`) e validators.
+- `Oficina.OrdensServico.Infrastructure` â€” persistencia EF Core, clients HTTP para Cadastro/Estoque, mensageria SQS (Inbox/Outbox) e a saga de pagamento/reserva (`Pagamentos/`).
+- `Oficina.OrdensServico.Api` â€” controllers, autenticacao/autorizacao, middlewares e composition root (`Program.cs`).
 
 ## Endpoints principais
 
-- `api/ordens-servico` — abertura, classificacao, diagnostico, status e ciclo de vida da ordem.
-- `api/orcamentos` e `api/meus-orcamentos` — aprovacao/recusa de orcamentos (funcionario e cliente).
-- `api/minhas-ordens-servico` — consulta pelo proprio cliente.
-- `api/orcamentos/acoes-externas` — aprovacao/recusa via link enviado ao cliente (anonimo, por token).
-- `api/relatorios` — tempo medio de execucao.
-- `api/dev/ordens-servico/{id}/forcar-compensacao` e `/reprocessar-reserva` — apenas em `Development`, para operar a saga manualmente.
+- `api/ordens-servico` â€” abertura, classificacao, diagnostico, status e ciclo de vida da ordem.
+- `api/orcamentos` e `api/meus-orcamentos` â€” aprovacao/recusa de orcamentos (funcionario e cliente).
+- `api/minhas-ordens-servico` â€” consulta pelo proprio cliente.
+- `api/orcamentos/acoes-externas` â€” aprovacao/recusa via link enviado ao cliente (anonimo, por token).
+- `api/relatorios` â€” tempo medio de execucao.
+- `api/dev/ordens-servico/{id}/forcar-compensacao` e `/reprocessar-reserva` â€” apenas em `Development`, para operar a saga manualmente.
 
 ## Fluxo distribuido (Saga)
 
-Aprovar um orcamento inicia um fluxo assincrono: pagamento (mock ou API real via `Payments:Mode`) processado por um `BackgroundService`, seguido de reserva de materiais no Estoque via SQS (Outbox local, Inbox no consumidor), com compensacao automatica em caso de recusa. Controlado por `DistributedFlow:Enabled`.
+Aprovar um orcamento inicia um fluxo assincrono: pagamento mock aprovado processado por um `BackgroundService`, seguido de reserva de materiais no Estoque via SQS (Outbox local, Inbox no consumidor), com compensacao automatica em caso de recusa. Controlado por `DistributedFlow:Enabled`.
 
 Autenticacao em ambiente local via header scheme (`Authentication:Mode=Development`), bloqueada fora de `Development`.
 
-Na Etapa 15, o modo oficial de publicacao usa `ASPNETCORE_ENVIRONMENT=Production` e exige `Payments:UseMock=true`, `Payments:MockBehavior=Approved`, `Payments:ExternalApiEnabled=false`, `Payments:ExternalWebhookEnabled=false` e `Payments:ContractStatus=Pending`. A integracao real com a API externa de Pagamentos permanece pendente de contrato.
+O modo oficial de publicacao usa `ASPNETCORE_ENVIRONMENT=Production` e exige `Payments:UseMock=true`, `Payments:MockBehavior=Approved`, `Payments:ExternalApiEnabled=false`, `Payments:ExternalWebhookEnabled=false` e `Payments:ContractStatus=Pending`.
 
 ## Pagamentos
 
 O fluxo atual usa `MockPagamentoGateway` por meio de `IPagamentoGateway`. O mock e deterministico, retorna aprovacao com referencia `mock-<chave-idempotencia>` e suporta compensacao idempotente com referencia `mock-compensation-<paymentOperationId>`.
 
-O codigo tambem prepara `ExternalPaymentApiGateway`, `IExternalPaymentContractMapper`, `IPaymentWebhookAuthenticator` e `IPaymentWebhookHandler`. Enquanto o contrato externo estiver pendente, o mapper e o autenticador concretos permanecem em modo `Pending` e a rota `POST /api/webhooks/payments` retorna `404` quando `ExternalWebhookEnabled=false`.
-
-```text
-Ordens -> API externa de pagamentos do grupo -> Mercado Pago
-```
-
-A integração externa real será implementada quando o contrato da API de
-pagamentos estiver disponível. Nenhum payload externo foi inventado e nenhuma
-integração direta com Mercado Pago existe nesta solução.
+O codigo mantem pontos de extensao para pagamento externo, mas eles permanecem desabilitados nesta etapa. A rota `POST /api/webhooks/payments` retorna `404` quando `ExternalWebhookEnabled=false`.
 
 ## Publicacao EKS preparada
 
@@ -52,8 +44,8 @@ Artefatos adicionados para publicacao independente:
 - `Dockerfile` para a imagem runtime sem SDK.
 - `Dockerfile.migration` para EF Migration Bundle.
 - `deploy/k8s/` com ServiceAccounts, SecretProviderClasses, ConfigMap, Service, Deployment `Recreate` com uma replica e Migration Job.
-- `scripts/validate-official-config.ps1`, `scripts/render-k8s-manifests.ps1`, `scripts/validate-ordens-deployment.ps1`, `scripts/smoke-test.ps1` e `scripts/run-saga-smoke-test.ps1`.
-- Workflows `Ordens CI` e `Ordens Deploy`.
+- `scripts/validate-official-config.ps1`, `scripts/render-k8s-manifests.ps1`, `scripts/validate-ordens-deployment.ps1`, `scripts/smoke-test.ps1`, `scripts/aws-e2e-validate.ps1` e `scripts/run-saga-smoke-test.ps1`.
+- Workflows `Ordens CI`, `Ordens Deploy` e `AWS E2E Validate`.
 
 Banco oficial:
 
@@ -79,13 +71,14 @@ Execucao futura:
 GitHub -> Actions -> Ordens Deploy -> Run workflow -> main -> DEPLOY
 ```
 
-Validacoes AWS pendentes ate credenciais AWS estarem configuradas: STS, SSM real, ECR real, Secrets Manager metadata, SQS real, redrive policies, Pod Identity/IRSA, CSI/ASCP, push de imagens, Migration Job, migration real, deployment EKS, consumer SQS real, Outbox real distribuido, compensacao real entre servicos, DLQ real, health/readiness no cluster e smoke test.
+O deploy valida STS, SSM, ECR, Secrets Manager metadata com `AWSCURRENT`, SQS, Pod Identity/IRSA, CSI/ASCP, push de imagens, Migration Job, rollout, health/readiness no cluster, pagamento mock aprovado e configuracao externa de pagamentos desabilitada.
 
 ## CI/CD
 
 - CI principal: `Ordens CI`, executada em todo Pull Request para `main`.
 - Required check esperado na branch protection: `Ordens CI`.
 - Workflow manual: `Ordens Deploy`, executado somente por `workflow_dispatch` na `main`, com confirmation `DEPLOY`.
+- Workflow manual de validacao: `AWS E2E Validate`, executado somente por `workflow_dispatch` na `main`, com confirmation `VALIDATE`.
 - Repository Secrets usados pelo deploy: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.
 - Repository Variables usadas pelo deploy: `AWS_REGION`.
 - A CI nao recebe credenciais AWS, nao publica imagens e nao altera AWS ou Kubernetes.
@@ -116,16 +109,15 @@ Os testes end-to-end (`Oficina.EndToEndTests`) exigem o ambiente Docker Compose 
 
 ## Testes E2E (workflow)
 
-O workflow manual `E2E Validate` (`workflow_dispatch`, confirmation `VALIDATE`)
-sobe a mesma stack Docker Compose em CI, com Cadastro e Estoque publicados
-(checkout) como repositórios irmãos, e executa o fluxo completo: orçamento
-aprovado até a entrega com Saga concluída, saldo insuficiente, pagamento
-recusado com compensação e mensagem fora de ordem. Nenhum recurso AWS real é
-acessado; LocalStack simula SQS e o SQL Server roda em container local.
+O workflow manual `AWS E2E Validate` (`workflow_dispatch`, confirmation
+`VALIDATE`) resolve a URL da API via SSM, gera token bootstrap sem imprimir o
+`SigningKey`, cria dados sinteticos unicos, autentica pelo `/api/auth/cpf`,
+executa o fluxo principal na AWS e valida SQS, health endpoints e pagamento mock
+aprovado ate a ordem chegar em `EmExecucao`.
 
-## Próximo componente
+## PrÃ³ximo componente
 
-Ordens de Serviço é implantado de forma independente após Cadastro e Estoque
-(consumidos via HTTP interno e SQS) e após as dependências compartilhadas
-(Infra DB, Platform, Auth). É o último microsserviço antes do
+Ordens de ServiÃ§o Ã© implantado de forma independente apÃ³s Cadastro e Estoque
+(consumidos via HTTP interno e SQS) e apÃ³s as dependÃªncias compartilhadas
+(Infra DB, Platform, Auth). Ã‰ o Ãºltimo microsserviÃ§o antes do
 [Entrypoint Deploy](../oficina-infra-fiap-fase4/README.md#ordem-de-provisionamento).

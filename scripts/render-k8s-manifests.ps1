@@ -11,7 +11,7 @@ param(
     [ValidateSet("PodIdentity","IRSA")][string]$WorkloadIdentityMode = "PodIdentity",
     [string]$RuntimeIrsaRoleArn = "",
     [string]$MigrationIrsaRoleArn = "",
-    [string]$MigrationJobName = "ordens-migration"
+    [string]$MigrationJobName = "oficina-ordens-servico-migration-local"
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +26,7 @@ function Assert-Tag([string]$Image, [string]$Name) {
 Assert-Tag $RuntimeImage "RuntimeImage"
 Assert-Tag $MigrationImage "MigrationImage"
 if ($MigrationImage -notmatch '-migration$') { throw "MigrationImage deve terminar com -migration." }
+if ($MigrationJobName -notmatch '^oficina-ordens-servico-migration-[a-zA-Z0-9-]+$') { throw "MigrationJobName invalido." }
 if ($CommandsQueueUrl -notmatch '^https?://') { throw "CommandsQueueUrl invalida." }
 if ($CommandsDlqUrl -notmatch '^https?://') { throw "CommandsDlqUrl invalida." }
 if ($EventsQueueUrl -notmatch '^https?://') { throw "EventsQueueUrl invalida." }
@@ -76,6 +77,16 @@ foreach ($template in $templates) {
         if ($content.Contains($placeholder)) { throw "Placeholder pendente em $($template.Name): $placeholder" }
     }
     if ($content -match 'ConnectionStrings__DefaultConnection:') { throw "Manifest nao deve conter connection string." }
+    if ($template.Name -eq "configmap.template.yaml") {
+        foreach ($flag in @(
+            'Payments__UseMock: "true"',
+            'Payments__MockBehavior: "Approved"',
+            'Payments__ExternalApiEnabled: "false"',
+            'Payments__ExternalWebhookEnabled: "false"'
+        )) {
+            if ($content -notmatch [regex]::Escape($flag)) { throw "Flag de pagamento ausente: $flag" }
+        }
+    }
 
     $name = $template.Name.Replace(".template", "")
     Set-Content -LiteralPath (Join-Path $OutputDirectory $name) -Value $content -Encoding utf8

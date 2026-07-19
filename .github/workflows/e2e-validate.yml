@@ -1,76 +1,59 @@
-name: E2E Validate
+name: AWS E2E Validate
 
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Type VALIDATE to run the end-to-end suite against Docker Compose."
+        description: "Type VALIDATE to run the AWS end-to-end validation."
         required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: e2e-validate
+  group: aws-e2e-validate
   cancel-in-progress: false
 
 jobs:
   validate:
-    name: End-to-end suite (Docker Compose)
+    name: Validate AWS E2E
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
     steps:
-      - name: Validate confirmation
-        run: test "${{ inputs.confirmation }}" = "VALIDATE"
+      - name: Checkout
+        uses: actions/checkout@v5
 
-      # The suite exercises Cadastro, Estoque and Ordens together, so the three
-      # repositories are checked out as siblings, matching the relative build
-      # contexts already declared in docker-compose.local.yml.
-      - name: Checkout Ordens
-        uses: actions/checkout@v4
-        with:
-          path: oficina-ordens-servico-fiap-fase4
-
-      - name: Checkout Cadastro
-        uses: actions/checkout@v4
-        with:
-          repository: fabianorodrigues/oficina-cadastro-fiap-fase4
-          ref: main
-          path: oficina-cadastro-fiap-fase4
-
-      - name: Checkout Estoque
-        uses: actions/checkout@v4
-        with:
-          repository: fabianorodrigues/oficina-estoque-fiap-fase4
-          ref: main
-          path: oficina-estoque-fiap-fase4
-
-      - name: Prepare local environment file
-        working-directory: oficina-ordens-servico-fiap-fase4
-        run: cp .env.local.example .env.local
-
-      # LocalStack and the local SQL Server container simulate SQS FIFO/DLQ and
-      # the databases; no real AWS resource is created, read or modified.
-      - name: Run end-to-end suite
-        working-directory: oficina-ordens-servico-fiap-fase4
-        run: docker compose -f docker-compose.local.yml --env-file .env.local --profile tests up --build --abort-on-container-exit --exit-code-from e2e-tests
-
-      - name: Collect logs on failure
-        if: failure()
-        working-directory: oficina-ordens-servico-fiap-fase4
-        run: docker compose -f docker-compose.local.yml --env-file .env.local logs --no-color --tail=200 || true
-
-      - name: Stop stack
-        if: always()
-        working-directory: oficina-ordens-servico-fiap-fase4
-        run: docker compose -f docker-compose.local.yml --env-file .env.local down
-
-      - name: Summary
-        if: always()
+      - name: Validate request
+        shell: pwsh
         run: |
-          {
-            echo '### E2E Validate'
-            echo
-            echo 'Fluxo principal, saldo insuficiente, pagamento recusado e mensagem fora de ordem validados via Docker Compose (Cadastro, Estoque, Ordens, WireMock, LocalStack).'
-            echo 'Pagamento mock aprovado e compensacao mock validados. Nenhum recurso AWS real foi acessado.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'This workflow must run from main.'
+          }
+          if ('${{ inputs.confirmation }}' -cne 'VALIDATE') {
+            throw 'Confirmation must be VALIDATE.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:AWS_REGION)) {
+            throw 'Repository Variable AWS_REGION is required.'
+          }
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Validate configuration
+        shell: pwsh
+        run: |
+          ./scripts/validate-official-config.ps1
+          ./scripts/validate-payment-integration.ps1
+
+      - name: Run AWS E2E
+        shell: pwsh
+        run: ./scripts/aws-e2e-validate.ps1 -Region "$env:AWS_REGION"

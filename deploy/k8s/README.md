@@ -35,7 +35,7 @@ As URLs reais vem do SSM no workflow de deploy e sao renderizadas em ConfigMap t
 
 ## Pagamento
 
-Etapa 12 usa provider `Mock` e `Payments__UseMock=true`. O secret futuro `/oficina/payments/mercado-pago` permanece documentado em `config/official.json`, mas nao e montado enquanto o mock estiver ativo.
+O deploy usa provider `Mock` com `Payments__UseMock=true`, `Payments__MockBehavior=Approved`, `Payments__ExternalApiEnabled=false` e `Payments__ExternalWebhookEnabled=false`. Nenhum secret ou infraestrutura de pagamento externo e usado nesta etapa.
 
 ## Decisoes
 
@@ -57,5 +57,5 @@ scripts/render-k8s-manifests.ps1 `
   -CommandsDlqUrl http://localhost:4566/000000000000/oficina-estoque-comandos-dlq.fifo `
   -EventsQueueUrl http://localhost:4566/000000000000/oficina-ordens-eventos.fifo `
   -EventsDlqUrl http://localhost:4566/000000000000/oficina-ordens-eventos-dlq.fifo `
-  -MigrationJobName ordens-migration-local
+  -MigrationJobName oficina-ordens-servico-migration-local
 ```
