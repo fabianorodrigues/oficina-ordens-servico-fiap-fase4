@@ -13,11 +13,11 @@ $config = $raw | ConvertFrom-Json
 
 Assert-True ($config.application.name -eq "oficina-ordens-servico") "Aplicacao oficial invalida."
 Assert-True ($config.application.environment -eq "Production") "Ambiente oficial deve ser Production."
-Assert-True ($config.kubernetes.namespace -eq "oficina") "Namespace invalido."
-Assert-True ($config.kubernetes.deploymentName -eq "oficina-ordens-servico") "Deployment invalido."
-Assert-True ($config.kubernetes.serviceName -eq "oficina-ordens-servico") "Service invalido."
-Assert-True ($config.kubernetes.replicas -eq 1) "Replicas deve ser 1."
-Assert-True ($config.kubernetes.deploymentStrategy -eq "Recreate") "Strategy deve ser Recreate."
+Assert-True ($config.ecs.serviceName -eq "oficina-ordens-servico") "ECS service invalido."
+Assert-True ($config.ecs.containerName -eq "oficina-ordens-servico") "ECS container invalido."
+Assert-True ($config.ecs.migrationContainerName -eq "oficina-ordens-servico-migration") "ECS migration container invalido."
+Assert-True ($config.ecs.desiredCount -eq 1) "Desired count deve ser 1."
+Assert-True ($config.ecs.launchType -eq "FARGATE") "Launch type deve ser FARGATE."
 Assert-True ($config.queues.consumerConcurrency -eq 1) "Consumer concurrency deve ser 1."
 Assert-True ($config.queues.maxMessagesPerReceive -eq 1) "Max messages deve ser 1."
 Assert-True ($config.secrets.runtimeDatabase -eq "/oficina/ordens/runtime-db") "Secret runtime invalido."
@@ -33,10 +33,35 @@ Assert-True ($null -eq $config.payments.submitPath) "SubmitPath externo nao deve
 Assert-True ($config.payments.webhookPath -eq "/api/webhooks/payments") "Webhook path invalido."
 Assert-True ($config.payments.timeoutSeconds -eq 5) "Timeout de pagamentos invalido."
 Assert-True ($config.payments.maxRetryAttempts -eq 2) "Retry de pagamentos invalido."
-Assert-True ($config.services.cadastroBaseUrl -match '^http://oficina-cadastro') "Cadastro deve usar DNS interno."
-Assert-True ($config.services.estoqueBaseUrl -match '^http://oficina-estoque') "Estoque deve usar DNS interno."
+Assert-True ($config.services.cadastroBaseUrlParameter -eq "/oficina/infra/alb/dns-name") "Cadastro deve usar ALB interno publicado pela plataforma."
+Assert-True ($config.services.estoqueBaseUrlParameter -eq "/oficina/infra/alb/dns-name") "Estoque deve usar ALB interno publicado pela plataforma."
 Assert-True ($config.health.path -eq "/health") "Health path invalido."
 Assert-True ($config.health.readinessPath -eq "/ready") "Readiness path invalido."
+
+$paths = @(
+    $config.aws.clusterNameParameter,
+    $config.aws.ecrRepositoryParameter,
+    $config.ecs.targetGroupArnParameter,
+    $config.ecs.logGroupNameParameter,
+    $config.ecs.taskSecurityGroupParameter,
+    $config.ecs.privateSubnet1Parameter,
+    $config.ecs.privateSubnet2Parameter,
+    $config.secrets.runtimeDatabase,
+    $config.secrets.migrationDatabase,
+    $config.queues.commandsUrlParameter,
+    $config.queues.commandsArnParameter,
+    $config.queues.commandsDlqUrlParameter,
+    $config.queues.commandsDlqArnParameter,
+    $config.queues.eventsUrlParameter,
+    $config.queues.eventsArnParameter,
+    $config.queues.eventsDlqUrlParameter,
+    $config.queues.eventsDlqArnParameter,
+    $config.services.cadastroBaseUrlParameter,
+    $config.services.estoqueBaseUrlParameter
+)
+foreach ($path in $paths) {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($path) -and $path.StartsWith("/oficina/")) "Parametro fora do prefixo /oficina/: $path"
+}
 
 $forbiddenPatterns = @(
     'Password\s*=',

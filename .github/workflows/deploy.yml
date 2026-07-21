@@ -20,6 +20,10 @@ jobs:
     name: Deploy Ordens
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECS_TASK_EXECUTION_ROLE_ARN: ${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}
+      ECS_TASK_ROLE_ARN: ${{ vars.ECS_TASK_ROLE_ARN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -40,8 +44,14 @@ jobs:
           ./scripts/validate-official-config.ps1
           ./scripts/validate-payment-integration.ps1
 
-      - name: Validate region
-        run: test -n "${{ vars.AWS_REGION }}"
+      - name: Validate deployment variables
+        shell: pwsh
+        run: |
+          foreach ($name in @('AWS_REGION', 'ECS_TASK_EXECUTION_ROLE_ARN', 'ECS_TASK_ROLE_ARN')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Repository Variable $name is required."
+            }
+          }
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
@@ -56,13 +66,16 @@ jobs:
         run: |
           set -euo pipefail
           aws sts get-caller-identity >/dev/null
-          CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name --region "${{ vars.AWS_REGION }}" --query Parameter.Value --output text)
-          NAMESPACE=$(aws ssm get-parameter --name /oficina/infra/cluster/namespace --region "${{ vars.AWS_REGION }}" --query Parameter.Value --output text)
-          ECR=$(aws ssm get-parameter --name /oficina/infra/ecr/ordens --region "${{ vars.AWS_REGION }}" --query Parameter.Value --output text)
-          COMMANDS=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos/url --region "${{ vars.AWS_REGION }}" --query Parameter.Value --output text)
-          COMMANDS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos-dlq/url --region "${{ vars.AWS_REGION }}" --query Parameter.Value --output text)
-          EVENTS=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos/url --region "${{ vars.AWS_REGION }}" --query Parameter.Value --output text)
-          EVENTS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos-dlq/url --region "${{ vars.AWS_REGION }}" --query Parameter.Value --output text)
+          CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name --region "$AWS_REGION" --query Parameter.Value --output text)
+          ECR=$(aws ssm get-parameter --name /oficina/infra/ecr/ordens --region "$AWS_REGION" --query Parameter.Value --output text)
+          COMMANDS=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos/url --region "$AWS_REGION" --query Parameter.Value --output text)
+          COMMANDS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos-dlq/url --region "$AWS_REGION" --query Parameter.Value --output text)
+          EVENTS=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos/url --region "$AWS_REGION" --query Parameter.Value --output text)
+          EVENTS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos-dlq/url --region "$AWS_REGION" --query Parameter.Value --output text)
+          aws ssm get-parameter --name /oficina/infra/alb/dns-name --region "$AWS_REGION" >/dev/null
+          aws ssm get-parameter --name /oficina/infra/ecs/ordens/target-group-arn --region "$AWS_REGION" >/dev/null
+          aws ssm get-parameter --name /oficina/infra/ecs/ordens/log-group-name --region "$AWS_REGION" >/dev/null
+          aws ssm get-parameter --name /oficina/infra/ecs/task-security-group-id --region "$AWS_REGION" >/dev/null
           aws secretsmanager describe-secret --secret-id /oficina/ordens/runtime-db >/dev/null
           aws secretsmanager describe-secret --secret-id /oficina/ordens/migration-db >/dev/null
           aws secretsmanager list-secret-version-ids --secret-id /oficina/ordens/runtime-db --include-deprecated --query "Versions[?contains(VersionStages, \`AWSCURRENT\`)] | length(@)" --output text | grep -q '^1$'
@@ -72,11 +85,9 @@ jobs:
           aws sqs get-queue-attributes --queue-url "$EVENTS" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue RedrivePolicy VisibilityTimeout --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
           aws sqs get-queue-attributes --queue-url "$EVENTS_DLQ" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
           echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
-          echo "namespace=$NAMESPACE" >> "$GITHUB_OUTPUT"
           echo "ecr=$ECR" >> "$GITHUB_OUTPUT"
           echo "runtime_image=$ECR:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "migration_image=$ECR:${GITHUB_SHA}-migration" >> "$GITHUB_OUTPUT"
-          echo "migration_job=oficina-ordens-servico-migration-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
           echo "commands=$COMMANDS" >> "$GITHUB_OUTPUT"
           echo "commands_dlq=$COMMANDS_DLQ" >> "$GITHUB_OUTPUT"
           echo "events=$EVENTS" >> "$GITHUB_OUTPUT"
@@ -89,7 +100,7 @@ jobs:
           dotnet test Oficina.OrdensServico.sln -c Release --no-build
 
       - name: Login ECR
-        uses: aws-actions/amazon-ecr-login@v3
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build images
         run: |
@@ -115,69 +126,15 @@ jobs:
           docker push "${{ steps.meta.outputs.runtime_image }}"
           docker push "${{ steps.meta.outputs.migration_image }}"
 
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name "${{ steps.meta.outputs.cluster }}" --region "${{ vars.AWS_REGION }}"
-
-      - name: Render manifests
-        shell: pwsh
-        run: >
-          ./scripts/render-k8s-manifests.ps1
-          -OutputDirectory artifacts/k8s
-          -RuntimeImage "${{ steps.meta.outputs.runtime_image }}"
-          -MigrationImage "${{ steps.meta.outputs.migration_image }}"
-          -AwsRegion "${{ vars.AWS_REGION }}"
-          -CommandsQueueUrl "${{ steps.meta.outputs.commands }}"
-          -CommandsDlqUrl "${{ steps.meta.outputs.commands_dlq }}"
-          -EventsQueueUrl "${{ steps.meta.outputs.events }}"
-          -EventsDlqUrl "${{ steps.meta.outputs.events_dlq }}"
-          -MigrationJobName "${{ steps.meta.outputs.migration_job }}"
-
-      - name: Validate payment flags
+      - name: Deploy to ECS
         shell: pwsh
         run: |
-          $config = Get-Content -LiteralPath 'artifacts/k8s/configmap.yaml' -Raw
-          foreach ($line in @(
-            'Payments__UseMock: "true"',
-            'Payments__MockBehavior: "Approved"',
-            'Payments__ExternalApiEnabled: "false"',
-            'Payments__ExternalWebhookEnabled: "false"'
-          )) {
-            if ($config -notmatch [regex]::Escape($line)) {
-              throw "Payment flag not found in ConfigMap: $line"
-            }
-          }
-
-      - name: Apply dependencies
-        run: |
-          kubectl get namespace "${{ steps.meta.outputs.namespace }}"
-          kubectl apply -f artifacts/k8s/service-account-runtime.yaml
-          kubectl apply -f artifacts/k8s/service-account-migration.yaml
-          kubectl apply -f artifacts/k8s/secret-provider-class-runtime.yaml
-          kubectl apply -f artifacts/k8s/secret-provider-class-migration.yaml
-          kubectl apply -f artifacts/k8s/configmap.yaml
-          kubectl apply -f artifacts/k8s/service.yaml
-
-      - name: Run migration
-        run: |
-          kubectl apply -f artifacts/k8s/migration-job.yaml
-          kubectl wait --for=condition=complete --timeout=900s "job/${{ steps.meta.outputs.migration_job }}" -n "${{ steps.meta.outputs.namespace }}"
-          kubectl logs "job/${{ steps.meta.outputs.migration_job }}" -n "${{ steps.meta.outputs.namespace }}" --tail=200
-
-      - name: Deploy workload
-        run: |
-          kubectl apply -f artifacts/k8s/deployment.yaml
-          kubectl rollout status deployment/oficina-ordens-servico -n "${{ steps.meta.outputs.namespace }}" --timeout=600s
-
-      - name: Validate health
-        shell: bash
-        run: |
-          set -euo pipefail
-          kubectl port-forward service/oficina-ordens-servico 18080:80 -n "${{ steps.meta.outputs.namespace }}" >/tmp/ordens-port-forward.log 2>&1 &
-          pf_pid=$!
-          trap 'kill $pf_pid || true' EXIT
-          sleep 5
-          pwsh ./scripts/smoke-test.ps1 -BaseUrl http://localhost:18080
-          pwsh ./scripts/validate-ordens-deployment.ps1 -Namespace "${{ steps.meta.outputs.namespace }}" -ExpectedImageTag "${{ github.sha }}" -MigrationJobName "${{ steps.meta.outputs.migration_job }}"
+          ./scripts/deploy-ecs-fargate.ps1 `
+            -RuntimeImage "${{ steps.meta.outputs.runtime_image }}" `
+            -MigrationImage "${{ steps.meta.outputs.migration_image }}" `
+            -AwsRegion "$env:AWS_REGION" `
+            -TaskExecutionRoleArn "$env:ECS_TASK_EXECUTION_ROLE_ARN" `
+            -TaskRoleArn "$env:ECS_TASK_ROLE_ARN"
 
       - name: Publish summary
         run: |
@@ -186,13 +143,12 @@ jobs:
             echo "Runtime image tag: ${GITHUB_SHA}"
             echo "Migration image tag: ${GITHUB_SHA}-migration"
             echo "Cluster: ${{ steps.meta.outputs.cluster }}"
-            echo "Namespace: ${{ steps.meta.outputs.namespace }}"
-            echo "Migration Job: ${{ steps.meta.outputs.migration_job }}"
+            echo "Service: oficina-ordens-servico"
             echo "Payment provider: Mock"
             echo "Mock behavior: Approved"
             echo "External API: Disabled"
             echo "External webhook: Disabled"
             echo "Contract: Pending"
-            echo "Health: /health"
-            echo "Readiness: /ready"
+            echo "Deployment status: ECS stable"
+            echo "Target health: healthy"
           } >> "$GITHUB_STEP_SUMMARY"

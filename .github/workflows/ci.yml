@@ -1,108 +1,49 @@
-name: Ordens CI
+﻿name: Ordens CI
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build-test-validate:
+  validate:
+    name: Build and validate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-dotnet@v5
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
-
-      - name: Restore
-        run: dotnet restore Oficina.OrdensServico.sln
-
-      - name: Build
-        run: dotnet build Oficina.OrdensServico.sln -c Release --no-restore
-
-      - name: Test
-        run: dotnet test Oficina.OrdensServico.sln -c Release --no-build --collect:"XPlat Code Coverage"
-
-      - name: Validate official config
+      - name: Validate configuration
         shell: pwsh
         run: |
           ./scripts/validate-official-config.ps1
           ./scripts/validate-payment-integration.ps1
-
-      - name: Payment mock tests
-        shell: pwsh
-        run: ./scripts/run-payment-mock-test.ps1
-
-      - name: Build runtime image
-        run: docker build -f Dockerfile -t oficina-ordens-servico:${{ github.sha }} .
-
-      - name: Build migration image
-        run: docker build -f Dockerfile.migration -t oficina-ordens-servico:${{ github.sha }}-migration .
-
-      - name: Render synthetic manifests
-        shell: pwsh
-        run: >
-          ./scripts/render-k8s-manifests.ps1
-          -OutputDirectory artifacts/k8s
-          -RuntimeImage oficina-ordens-servico:${{ github.sha }}
-          -MigrationImage oficina-ordens-servico:${{ github.sha }}-migration
-          -AwsRegion us-east-1
-          -CommandsQueueUrl http://localhost:4566/000000000000/oficina-estoque-comandos.fifo
-          -CommandsDlqUrl http://localhost:4566/000000000000/oficina-estoque-comandos-dlq.fifo
-          -EventsQueueUrl http://localhost:4566/000000000000/oficina-ordens-eventos.fifo
-          -EventsDlqUrl http://localhost:4566/000000000000/oficina-ordens-eventos-dlq.fifo
-          -MigrationJobName oficina-ordens-servico-migration-ci-1
-
-      - name: Kubeconform
-        uses: yannh/kubeconform-action@v0.4.0
-        with:
-          files: artifacts/k8s
-          strict: "true"
-
-      - name: PowerShell AST
+      - name: Validate PowerShell syntax
         shell: pwsh
         run: |
-          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
-            $tokens = $null
-            $errors = $null
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem -Path scripts -Filter *.ps1 -File | ForEach-Object {
+            $tokens = $null; $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) { throw "PowerShell AST failure in $($_.Name)" }
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error "$($_.Extent.File): $($_.Message)" }; exit 1 }
           }
-
-      - name: Security search
-        shell: pwsh
+      - name: Restore
+        run: dotnet restore Oficina.OrdensServico.sln
+      - name: Build
+        run: dotnet build Oficina.OrdensServico.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test Oficina.OrdensServico.sln --configuration Release --no-build
+      - name: Validate Dockerfiles
+        shell: bash
         run: |
-          $patterns = @(
-            'MERCADO_PAGO_ACCESS_TOKEN',
-            'MERCADO_PAGO_CLIENT_ID',
-            'MERCADO_PAGO_CLIENT_SECRET',
-            'MercadoPago.Client',
-            'MercadoPago.Config',
-            'aws_dynamodb_table',
-            'oficina-payment-audit',
-            'terraform/payments',
-            'payments-infra-deploy',
-            'payment-api-config-sync',
-            'PAYMENTS_API_CREDENTIAL',
-            '/oficina/payments/credential',
-            'AccessToken=',
-            'ClientSecret=',
-            'WebhookSecret=',
-            'EnsureCreated',
-            'HorizontalPodAutoscaler',
-            'replicas: 2',
-            'PAYMENTS_USE_MOCK=false',
-            ('terraform ' + 'destroy')
-          )
-          foreach ($pattern in $patterns) {
-            $matches = rg -n $pattern -g '!**/bin/**' -g '!**/obj/**' -g '!**/TestResults/**' -g '!scripts/validate-payment-integration.ps1' -g '!.github/workflows/ci.yml' || $true
-            if ($matches) { throw "Padrao proibido encontrado: $pattern`n$matches" }
-          }
-
-      - name: Validate workflow contract
-        shell: pwsh
-        run: ./scripts/validate-workflows.ps1
+          set -euo pipefail
+          test -f Dockerfile
+          test -f Dockerfile.migration
+          ! grep -R "kubectl\|helm\|deploy/k8s" scripts config

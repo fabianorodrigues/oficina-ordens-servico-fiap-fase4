@@ -14,7 +14,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 if (builder.Environment.IsProduction())
 {
-    builder.Configuration.AddKeyPerFile("/mnt/secrets-store", optional: false, reloadOnChange: false);
+    builder.Configuration.AddKeyPerFile("/mnt/secrets-store", optional: true, reloadOnChange: false);
 }
 
 builder.Configuration.AddEnvironmentVariables();

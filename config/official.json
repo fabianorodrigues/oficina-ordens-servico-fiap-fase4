@@ -10,14 +10,17 @@
     "ecrRepositoryParameter": "/oficina/infra/ecr/ordens",
     "regionFromWorkflow": true
   },
-  "kubernetes": {
-    "namespace": "oficina",
-    "deploymentName": "oficina-ordens-servico",
+  "ecs": {
     "serviceName": "oficina-ordens-servico",
-    "runtimeServiceAccount": "ordens-runtime",
-    "migrationServiceAccount": "ordens-migrator",
-    "replicas": 1,
-    "deploymentStrategy": "Recreate"
+    "containerName": "oficina-ordens-servico",
+    "migrationContainerName": "oficina-ordens-servico-migration",
+    "desiredCount": 1,
+    "launchType": "FARGATE",
+    "targetGroupArnParameter": "/oficina/infra/ecs/ordens/target-group-arn",
+    "logGroupNameParameter": "/oficina/infra/ecs/ordens/log-group-name",
+    "taskSecurityGroupParameter": "/oficina/infra/ecs/task-security-group-id",
+    "privateSubnet1Parameter": "/oficina/infra/subnets/private/1",
+    "privateSubnet2Parameter": "/oficina/infra/subnets/private/2"
   },
   "secrets": {
     "runtimeDatabase": "/oficina/ordens/runtime-db",
@@ -38,8 +41,8 @@
     "visibilityTimeoutSeconds": 60
   },
   "services": {
-    "cadastroBaseUrl": "http://oficina-cadastro",
-    "estoqueBaseUrl": "http://oficina-estoque"
+    "cadastroBaseUrlParameter": "/oficina/infra/alb/dns-name",
+    "estoqueBaseUrlParameter": "/oficina/infra/alb/dns-name"
   },
   "payments": {
     "useMock": true,
