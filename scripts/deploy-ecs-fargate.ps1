@@ -191,29 +191,33 @@ $albDns = Ssm $cfg.services.cadastroBaseUrlParameter
 
 AssertRdsIngressRule $rdsSecurityGroup $securityGroup
 
-$baseEnv = @(Env "ASPNETCORE_ENVIRONMENT" "Production"; Env "AWS_REGION" $AwsRegion; Env "Authentication__Mode" "")
+$baseEnv = @(
+    Env "ASPNETCORE_ENVIRONMENT" "Production"
+    Env "AWS_REGION" $AwsRegion
+    Env "Authentication__Mode" ""
+)
 $runtimeEnv = @($baseEnv + @(
-    Env "DistributedFlow__Enabled" "true",
-    Env "Integrations__Cadastro__BaseUrl" "http://$albDns",
-    Env "Integrations__Estoque__BaseUrl" "http://$albDns",
-    Env "Messaging__Sqs__Enabled" "true",
-    Env "Messaging__Sqs__Region" $AwsRegion,
-    Env "Messaging__Sqs__CommandsQueueName" "oficina-estoque-comandos.fifo",
-    Env "Messaging__Sqs__EventsQueueName" "oficina-ordens-eventos.fifo",
-    Env "Messaging__Sqs__EventsDlqQueueName" "oficina-ordens-eventos-dlq.fifo",
-    Env "Messaging__Sqs__CommandsQueueUrl" (Ssm $cfg.queues.commandsUrlParameter),
-    Env "Messaging__Sqs__CommandsDlqQueueUrl" (Ssm $cfg.queues.commandsDlqUrlParameter),
-    Env "Messaging__Sqs__EventsQueueUrl" (Ssm $cfg.queues.eventsUrlParameter),
-    Env "Messaging__Sqs__EventsDlqQueueUrl" (Ssm $cfg.queues.eventsDlqUrlParameter),
-    Env "Messaging__Sqs__ConsumerConcurrency" "$($cfg.queues.consumerConcurrency)",
-    Env "Messaging__Sqs__MaxMessagesPerReceive" "$($cfg.queues.maxMessagesPerReceive)",
-    Env "Messaging__Sqs__WaitTimeSeconds" "$($cfg.queues.waitTimeSeconds)",
-    Env "Messaging__Sqs__VisibilityTimeoutSeconds" "$($cfg.queues.visibilityTimeoutSeconds)",
-    Env "Payments__UseMock" "$($cfg.payments.useMock)".ToLowerInvariant(),
-    Env "Payments__Mode" "Mock",
-    Env "Payments__MockBehavior" "$($cfg.payments.mockBehavior)",
-    Env "Payments__ExternalApiEnabled" "false",
-    Env "Payments__ExternalWebhookEnabled" "false",
+    Env "DistributedFlow__Enabled" "true"
+    Env "Integrations__Cadastro__BaseUrl" "http://$albDns"
+    Env "Integrations__Estoque__BaseUrl" "http://$albDns"
+    Env "Messaging__Sqs__Enabled" "true"
+    Env "Messaging__Sqs__Region" $AwsRegion
+    Env "Messaging__Sqs__CommandsQueueName" "oficina-estoque-comandos.fifo"
+    Env "Messaging__Sqs__EventsQueueName" "oficina-ordens-eventos.fifo"
+    Env "Messaging__Sqs__EventsDlqQueueName" "oficina-ordens-eventos-dlq.fifo"
+    Env "Messaging__Sqs__CommandsQueueUrl" (Ssm $cfg.queues.commandsUrlParameter)
+    Env "Messaging__Sqs__CommandsDlqQueueUrl" (Ssm $cfg.queues.commandsDlqUrlParameter)
+    Env "Messaging__Sqs__EventsQueueUrl" (Ssm $cfg.queues.eventsUrlParameter)
+    Env "Messaging__Sqs__EventsDlqQueueUrl" (Ssm $cfg.queues.eventsDlqUrlParameter)
+    Env "Messaging__Sqs__ConsumerConcurrency" "$($cfg.queues.consumerConcurrency)"
+    Env "Messaging__Sqs__MaxMessagesPerReceive" "$($cfg.queues.maxMessagesPerReceive)"
+    Env "Messaging__Sqs__WaitTimeSeconds" "$($cfg.queues.waitTimeSeconds)"
+    Env "Messaging__Sqs__VisibilityTimeoutSeconds" "$($cfg.queues.visibilityTimeoutSeconds)"
+    Env "Payments__UseMock" "$($cfg.payments.useMock)".ToLowerInvariant()
+    Env "Payments__Mode" "Mock"
+    Env "Payments__MockBehavior" "$($cfg.payments.mockBehavior)"
+    Env "Payments__ExternalApiEnabled" "false"
+    Env "Payments__ExternalWebhookEnabled" "false"
     Env "Payments__ContractStatus" "$($cfg.payments.contractStatus)"
 ))
 $migrationEnv = @($runtimeEnv)
