@@ -61,6 +61,117 @@ function RegisterTask([string]$Family, [string]$Container, [string]$Image, [arra
     $arn.Trim()
 }
 
+function Get-ObjectProperty($Object, [string]$Name) {
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Get-EcsTaskId([string]$TaskArn) {
+    return (($TaskArn -split '/') | Select-Object -Last 1)
+}
+
+function AssertRdsIngressRule([string]$RdsSecurityGroupId, [string]$TaskSecurityGroupId) {
+    $rulesOutput = aws ec2 describe-security-group-rules `
+        --region $AwsRegion `
+        --filters "Name=group-id,Values=$RdsSecurityGroupId" "Name=referenced-group-info.group-id,Values=$TaskSecurityGroupId" `
+        --output json 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not validate RDS security group ingress. AWS CLI output: $(($rulesOutput | Out-String).Trim())"
+        return
+    }
+
+    $rulesJson = ($rulesOutput | Out-String).Trim()
+    $rules = @()
+    if (-not [string]::IsNullOrWhiteSpace($rulesJson)) {
+        $rules = @((ConvertFrom-Json -InputObject $rulesJson).SecurityGroupRules)
+    }
+
+    $matchingRules = @($rules | Where-Object {
+        $fromPort = Get-ObjectProperty $_ "FromPort"
+        $toPort = Get-ObjectProperty $_ "ToPort"
+        -not [bool](Get-ObjectProperty $_ "IsEgress") `
+            -and (Get-ObjectProperty $_ "IpProtocol") -eq "tcp" `
+            -and $null -ne $fromPort `
+            -and $null -ne $toPort `
+            -and [int]$fromPort -le 1433 `
+            -and [int]$toPort -ge 1433
+    })
+
+    if ($matchingRules.Count -lt 1) {
+        throw "RDS security group $RdsSecurityGroupId does not allow SQL Server ingress from ECS task security group $TaskSecurityGroupId. Run the oficina-infra platform deploy to apply aws_vpc_security_group_ingress_rule.rds_from_tasks before deploying APIs."
+    }
+
+    Write-Host "RDS ingress validated: $TaskSecurityGroupId -> $RdsSecurityGroupId tcp/1433."
+}
+
+function WriteMigrationTaskDiagnostics {
+    param(
+        [string]$ClusterName,
+        [string]$TaskArn,
+        [string]$ContainerName,
+        [string]$Family,
+        [string]$LogGroupName
+    )
+
+    Write-Host "Collecting ECS migration diagnostics for $TaskArn"
+
+    $taskOutput = aws ecs describe-tasks --cluster $ClusterName --tasks $TaskArn --region $AwsRegion --output json 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $taskJson = ($taskOutput | Out-String).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($taskJson)) {
+            $task = @((ConvertFrom-Json -InputObject $taskJson).tasks)[0]
+            Write-Host "Task lastStatus=$(Get-ObjectProperty $task 'lastStatus') stopCode=$(Get-ObjectProperty $task 'stopCode') stoppedReason=$(Get-ObjectProperty $task 'stoppedReason')"
+
+            $containerInfo = @($task.containers | Where-Object { (Get-ObjectProperty $_ "name") -eq $ContainerName } | Select-Object -First 1)
+            if ($containerInfo.Count -gt 0) {
+                $selectedContainer = $containerInfo[0]
+                Write-Host "Container $ContainerName exitCode=$(Get-ObjectProperty $selectedContainer 'exitCode') reason=$(Get-ObjectProperty $selectedContainer 'reason')"
+            }
+        }
+    }
+    else {
+        Write-Warning "Could not describe migration task. AWS CLI output: $(($taskOutput | Out-String).Trim())"
+    }
+
+    $taskId = Get-EcsTaskId $TaskArn
+    $logStream = "$Family/$ContainerName/$taskId"
+    Write-Host "CloudWatch log stream: $LogGroupName/$logStream"
+
+    $eventsOutput = aws logs get-log-events `
+        --log-group-name $LogGroupName `
+        --log-stream-name $logStream `
+        --limit 100 `
+        --region $AwsRegion `
+        --query 'events[].message' `
+        --output json 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not read migration CloudWatch logs. AWS CLI output: $(($eventsOutput | Out-String).Trim())"
+        return
+    }
+
+    $eventsJson = ($eventsOutput | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($eventsJson)) {
+        Write-Host "No migration log events returned."
+        return
+    }
+
+    $messages = @($eventsJson | ConvertFrom-Json)
+    if ($messages.Count -lt 1) {
+        Write-Host "No migration log events returned."
+        return
+    }
+
+    Write-Host "----- Migration task log tail -----"
+    foreach ($message in $messages) {
+        Write-Host $message
+    }
+    Write-Host "----- End migration task log tail -----"
+}
+
 $cfg = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $service = [string]$cfg.ecs.serviceName
 $container = [string]$cfg.ecs.containerName
@@ -70,12 +181,15 @@ $cluster = Ssm $cfg.aws.clusterNameParameter
 $subnet1 = Ssm $cfg.ecs.privateSubnet1Parameter
 $subnet2 = Ssm $cfg.ecs.privateSubnet2Parameter
 $securityGroup = Ssm $cfg.ecs.taskSecurityGroupParameter
+$rdsSecurityGroup = Ssm "/oficina/infra/rds/security-group-id"
 $targetGroup = Ssm $cfg.ecs.targetGroupArnParameter
 $logGroup = Ssm $cfg.ecs.logGroupNameParameter
 $runtimeSecret = SecretArn $cfg.secrets.runtimeDatabase
 $migrationSecret = SecretArn $cfg.secrets.migrationDatabase
 $desired = [int]$cfg.ecs.desiredCount
 $albDns = Ssm $cfg.services.cadastroBaseUrlParameter
+
+AssertRdsIngressRule $rdsSecurityGroup $securityGroup
 
 $baseEnv = @(Env "ASPNETCORE_ENVIRONMENT" "Production"; Env "AWS_REGION" $AwsRegion; Env "Authentication__Mode" "")
 $runtimeEnv = @($baseEnv + @(
@@ -102,18 +216,25 @@ $runtimeEnv = @($baseEnv + @(
     Env "Payments__ExternalWebhookEnabled" "false",
     Env "Payments__ContractStatus" "$($cfg.payments.contractStatus)"
 ))
-$migrationEnv = @($baseEnv)
+$migrationEnv = @($runtimeEnv)
 $runtimeSecrets = @(Sec "ConnectionStrings__DefaultConnection" "$($runtimeSecret):ConnectionString::")
 $migrationSecrets = @(Sec "ConnectionStrings__DefaultConnection" "$($migrationSecret):ConnectionString::")
 $network = "awsvpcConfiguration={subnets=[$subnet1,$subnet2],securityGroups=[$securityGroup],assignPublicIp=DISABLED}"
 
-$migrationTaskDef = RegisterTask "$service-migration" $migrationContainer $MigrationImage $migrationEnv $migrationSecrets $false
+$migrationFamily = "$service-migration"
+$migrationTaskDef = RegisterTask $migrationFamily $migrationContainer $MigrationImage $migrationEnv $migrationSecrets $false
 $migrationTask = aws ecs run-task --cluster $cluster --launch-type FARGATE --started-by "$service-migration" --task-definition $migrationTaskDef --network-configuration $network --region $AwsRegion --query 'tasks[0].taskArn' --output text
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($migrationTask) -or $migrationTask -eq "None") { throw "Could not start migration task." }
 aws ecs wait tasks-stopped --cluster $cluster --tasks $migrationTask --region $AwsRegion
-if ($LASTEXITCODE -ne 0) { throw "Migration task wait failed." }
+if ($LASTEXITCODE -ne 0) {
+    WriteMigrationTaskDiagnostics $cluster $migrationTask $migrationContainer $migrationFamily $logGroup
+    throw "Migration task wait failed."
+}
 $exitCode = aws ecs describe-tasks --cluster $cluster --tasks $migrationTask --region $AwsRegion --query "tasks[0].containers[?name=='$migrationContainer'].exitCode | [0]" --output text
-if ($exitCode -ne "0") { throw "Migration failed with exit code $exitCode." }
+if ($exitCode -ne "0") {
+    WriteMigrationTaskDiagnostics $cluster $migrationTask $migrationContainer $migrationFamily $logGroup
+    throw "Migration failed with exit code $exitCode."
+}
 
 $runtimeTaskDef = RegisterTask $service $container $RuntimeImage $runtimeEnv $runtimeSecrets $true
 $status = aws ecs describe-services --cluster $cluster --services $service --region $AwsRegion --query 'services[0].status' --output text 2>$null

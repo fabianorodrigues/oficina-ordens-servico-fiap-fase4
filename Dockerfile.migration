@@ -9,6 +9,9 @@ RUN /tools/dotnet-ef migrations bundle --project src/Oficina.OrdensServico.Infra
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0 AS migration
 WORKDIR /migration
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /tmp/aws-rds-global-bundle.pem
+RUN cat /tmp/aws-rds-global-bundle.pem >> /etc/ssl/certs/ca-certificates.crt \
+    && rm /tmp/aws-rds-global-bundle.pem
 COPY --from=build /bundle/ordens-migration-bundle ./ordens-migration-bundle
 RUN chmod +x ./ordens-migration-bundle
 USER app
