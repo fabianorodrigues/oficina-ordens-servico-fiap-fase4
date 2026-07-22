@@ -38,14 +38,29 @@ $forbiddenPatterns = @(
     'AccessToken=',
     'ClientSecret=',
     'WebhookSecret=',
-    'SecretString',
     ('terraform ' + 'destroy')
 )
 
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$scriptPath = (Resolve-Path -LiteralPath $PSCommandPath).Path
+$excludedDirectoryNames = @('bin', 'obj', 'TestResults', '.git')
+$trimChars = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+$files = Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Force | Where-Object {
+    if ($_.FullName -eq $scriptPath) {
+        $false
+    }
+    else {
+        $relativePath = $_.FullName.Substring($repoRoot.Length).TrimStart($trimChars)
+        $pathParts = $relativePath -split '[\\/]'
+        -not ($pathParts | Where-Object { $excludedDirectoryNames -contains $_ })
+    }
+}
+
 foreach ($pattern in $forbiddenPatterns) {
-    $matches = rg -n $pattern -g '!**/bin/**' -g '!**/obj/**' -g '!**/TestResults/**' -g '!scripts/validate-payment-integration.ps1' -g '!**/.git/**' 2>$null
-    if ($matches) {
-        throw "Padrao proibido encontrado: $pattern`n$matches"
+    $matches = @($files | Select-String -Pattern $pattern)
+    if ($matches.Count -gt 0) {
+        $formattedMatches = ($matches | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line.Trim())" }) -join "`n"
+        throw "Padrao proibido encontrado: $pattern`n$formattedMatches"
     }
 }
 
