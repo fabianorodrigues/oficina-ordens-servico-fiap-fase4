@@ -1,0 +1,59 @@
+name: AWS E2E Validate
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type VALIDATE to run the AWS end-to-end validation."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aws-e2e-validate
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate AWS E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate request
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'This workflow must run from main.'
+          }
+          if ('${{ inputs.confirmation }}' -cne 'VALIDATE') {
+            throw 'Confirmation must be VALIDATE.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:AWS_REGION)) {
+            throw 'Repository Variable AWS_REGION is required.'
+          }
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Validate configuration
+        shell: pwsh
+        run: |
+          ./scripts/validate-official-config.ps1
+          ./scripts/validate-payment-integration.ps1
+
+      - name: Run AWS E2E
+        shell: pwsh
+        run: ./scripts/aws-e2e-validate.ps1 -Region "$env:AWS_REGION"

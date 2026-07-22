@@ -1,0 +1,154 @@
+name: Ordens Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY to continue
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ordens-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Ordens
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECS_TASK_EXECUTION_ROLE_ARN: ${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}
+      ECS_TASK_ROLE_ARN: ${{ vars.ECS_TASK_ROLE_ARN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate request
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "${{ inputs.confirmation }}" = "DEPLOY"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Validate configuration
+        shell: pwsh
+        run: |
+          ./scripts/validate-official-config.ps1
+          ./scripts/validate-payment-integration.ps1
+
+      - name: Validate deployment variables
+        shell: pwsh
+        run: |
+          foreach ($name in @('AWS_REGION', 'ECS_TASK_EXECUTION_ROLE_ARN', 'ECS_TASK_ROLE_ARN')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Repository Variable $name is required."
+            }
+          }
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Read AWS metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity >/dev/null
+          CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name --region "$AWS_REGION" --query Parameter.Value --output text)
+          ECR=$(aws ssm get-parameter --name /oficina/infra/ecr/ordens --region "$AWS_REGION" --query Parameter.Value --output text)
+          COMMANDS=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos/url --region "$AWS_REGION" --query Parameter.Value --output text)
+          COMMANDS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos-dlq/url --region "$AWS_REGION" --query Parameter.Value --output text)
+          EVENTS=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos/url --region "$AWS_REGION" --query Parameter.Value --output text)
+          EVENTS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos-dlq/url --region "$AWS_REGION" --query Parameter.Value --output text)
+          aws ssm get-parameter --name /oficina/infra/alb/dns-name --region "$AWS_REGION" >/dev/null
+          aws ssm get-parameter --name /oficina/infra/ecs/ordens/target-group-arn --region "$AWS_REGION" >/dev/null
+          aws ssm get-parameter --name /oficina/infra/ecs/ordens/log-group-name --region "$AWS_REGION" >/dev/null
+          aws ssm get-parameter --name /oficina/infra/ecs/task-security-group-id --region "$AWS_REGION" >/dev/null
+          aws secretsmanager describe-secret --secret-id /oficina/ordens/runtime-db >/dev/null
+          aws secretsmanager describe-secret --secret-id /oficina/ordens/migration-db >/dev/null
+          aws secretsmanager list-secret-version-ids --secret-id /oficina/ordens/runtime-db --include-deprecated --query "Versions[?contains(VersionStages, \`AWSCURRENT\`)] | length(@)" --output text | grep -q '^1$'
+          aws secretsmanager list-secret-version-ids --secret-id /oficina/ordens/migration-db --include-deprecated --query "Versions[?contains(VersionStages, \`AWSCURRENT\`)] | length(@)" --output text | grep -q '^1$'
+          aws sqs get-queue-attributes --queue-url "$COMMANDS" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue RedrivePolicy VisibilityTimeout --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
+          aws sqs get-queue-attributes --queue-url "$COMMANDS_DLQ" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
+          aws sqs get-queue-attributes --queue-url "$EVENTS" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue RedrivePolicy VisibilityTimeout --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
+          aws sqs get-queue-attributes --queue-url "$EVENTS_DLQ" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
+          echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
+          echo "ecr=$ECR" >> "$GITHUB_OUTPUT"
+          echo "runtime_image=$ECR:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "migration_image=$ECR:${GITHUB_SHA}-migration" >> "$GITHUB_OUTPUT"
+          echo "commands=$COMMANDS" >> "$GITHUB_OUTPUT"
+          echo "commands_dlq=$COMMANDS_DLQ" >> "$GITHUB_OUTPUT"
+          echo "events=$EVENTS" >> "$GITHUB_OUTPUT"
+          echo "events_dlq=$EVENTS_DLQ" >> "$GITHUB_OUTPUT"
+
+      - name: Build solution
+        run: |
+          dotnet restore Oficina.OrdensServico.sln
+          dotnet build Oficina.OrdensServico.sln -c Release --no-restore
+          dotnet test Oficina.OrdensServico.sln -c Release --no-build
+
+      - name: Login ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build images
+        run: |
+          docker build -f Dockerfile -t "${{ steps.meta.outputs.runtime_image }}" .
+          docker build -f Dockerfile.migration -t "${{ steps.meta.outputs.migration_image }}" .
+
+      - name: Scan images
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ steps.meta.outputs.runtime_image }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Scan migration image
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ steps.meta.outputs.migration_image }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Push images
+        run: |
+          docker push "${{ steps.meta.outputs.runtime_image }}"
+          docker push "${{ steps.meta.outputs.migration_image }}"
+
+      - name: Deploy to ECS
+        shell: pwsh
+        run: |
+          ./scripts/deploy-ecs-fargate.ps1 `
+            -RuntimeImage "${{ steps.meta.outputs.runtime_image }}" `
+            -MigrationImage "${{ steps.meta.outputs.migration_image }}" `
+            -AwsRegion "$env:AWS_REGION" `
+            -TaskExecutionRoleArn "$env:ECS_TASK_EXECUTION_ROLE_ARN" `
+            -TaskRoleArn "$env:ECS_TASK_ROLE_ARN"
+
+      - name: Publish summary
+        run: |
+          {
+            echo "Commit SHA: ${GITHUB_SHA}"
+            echo "Runtime image tag: ${GITHUB_SHA}"
+            echo "Migration image tag: ${GITHUB_SHA}-migration"
+            echo "Cluster: ${{ steps.meta.outputs.cluster }}"
+            echo "Service: oficina-ordens-servico"
+            echo "Payment provider: Mock"
+            echo "Mock behavior: Approved"
+            echo "External API: Disabled"
+            echo "External webhook: Disabled"
+            echo "Contract: Pending"
+            echo "Deployment status: ECS stable"
+            echo "Target health: healthy"
+          } >> "$GITHUB_STEP_SUMMARY"

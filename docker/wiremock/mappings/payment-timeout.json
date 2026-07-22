@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/payments",
+    "bodyPatterns": [{ "matchesJsonPath": "$[?(@.scenario == 'timeout')]" }]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 15000,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "status": "timeout-simulado"
+    }
+  }
+}

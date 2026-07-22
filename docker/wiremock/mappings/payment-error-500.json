@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/payments",
+    "bodyPatterns": [{ "matchesJsonPath": "$[?(@.scenario == 'erro-500')]" }]
+  },
+  "response": {
+    "status": 500,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "error": "provider_error"
+    }
+  }
+}

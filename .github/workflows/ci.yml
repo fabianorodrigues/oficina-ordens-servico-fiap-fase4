@@ -1,0 +1,49 @@
+﻿name: Ordens CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Build and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - name: Validate configuration
+        shell: pwsh
+        run: |
+          ./scripts/validate-official-config.ps1
+          ./scripts/validate-payment-integration.ps1
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem -Path scripts -Filter *.ps1 -File | ForEach-Object {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error "$($_.Extent.File): $($_.Message)" }; exit 1 }
+          }
+      - name: Restore
+        run: dotnet restore Oficina.OrdensServico.sln
+      - name: Build
+        run: dotnet build Oficina.OrdensServico.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test Oficina.OrdensServico.sln --configuration Release --no-build
+      - name: Validate Dockerfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f Dockerfile
+          test -f Dockerfile.migration
+          ! grep -R "kubectl\|helm\|deploy/k8s" scripts config

@@ -38,8 +38,13 @@ ScaffoldingReadMe.txt
 
 # dotenv environment variables file
 .env
+.env.local
 
 # Others
+.vs/
+*.slnx
+*.user
+*.suo
 ~$*
 *~
 CodeCoverage/

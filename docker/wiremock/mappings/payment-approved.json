@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/payments",
+    "bodyPatterns": [{ "matchesJsonPath": "$[?(@.scenario == 'aprovado')]" }]
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "providerPaymentId": "{{randomValue type='UUID'}}",
+      "status": "aprovado"
+    }
+  }
+}
