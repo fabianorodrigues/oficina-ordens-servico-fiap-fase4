@@ -84,10 +84,12 @@ jobs:
           aws sqs get-queue-attributes --queue-url "$COMMANDS_DLQ" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
           aws sqs get-queue-attributes --queue-url "$EVENTS" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue RedrivePolicy VisibilityTimeout --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
           aws sqs get-queue-attributes --queue-url "$EVENTS_DLQ" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
+          IMAGE_TAG="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
           echo "ecr=$ECR" >> "$GITHUB_OUTPUT"
-          echo "runtime_image=$ECR:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          echo "migration_image=$ECR:${GITHUB_SHA}-migration" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "runtime_image=$ECR:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "migration_image=$ECR:${IMAGE_TAG}-migration" >> "$GITHUB_OUTPUT"
           echo "commands=$COMMANDS" >> "$GITHUB_OUTPUT"
           echo "commands_dlq=$COMMANDS_DLQ" >> "$GITHUB_OUTPUT"
           echo "events=$EVENTS" >> "$GITHUB_OUTPUT"
@@ -140,8 +142,8 @@ jobs:
         run: |
           {
             echo "Commit SHA: ${GITHUB_SHA}"
-            echo "Runtime image tag: ${GITHUB_SHA}"
-            echo "Migration image tag: ${GITHUB_SHA}-migration"
+            echo "Runtime image tag: ${{ steps.meta.outputs.image_tag }}"
+            echo "Migration image tag: ${{ steps.meta.outputs.image_tag }}-migration"
             echo "Cluster: ${{ steps.meta.outputs.cluster }}"
             echo "Service: oficina-ordens-servico"
             echo "Payment provider: Mock"

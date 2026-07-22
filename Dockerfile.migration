@@ -2,11 +2,14 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
 RUN dotnet restore Oficina.OrdensServico.sln
+RUN dotnet restore src/Oficina.OrdensServico.Api/Oficina.OrdensServico.Api.csproj --runtime linux-x64
 RUN dotnet tool install --tool-path /tools dotnet-ef --version 10.0.7
-RUN /tools/dotnet-ef migrations bundle --project src/Oficina.OrdensServico.Infrastructure/Oficina.OrdensServico.Infrastructure.csproj --startup-project src/Oficina.OrdensServico.Api/Oficina.OrdensServico.Api.csproj --configuration Release --output /bundle/ordens-migration-bundle
+RUN dotnet build src/Oficina.OrdensServico.Api/Oficina.OrdensServico.Api.csproj --configuration Release --no-restore
+RUN /tools/dotnet-ef migrations bundle --project src/Oficina.OrdensServico.Infrastructure/Oficina.OrdensServico.Infrastructure.csproj --startup-project src/Oficina.OrdensServico.Api/Oficina.OrdensServico.Api.csproj --configuration Release --runtime linux-x64 --self-contained --output /bundle/ordens-migration-bundle
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0 AS migration
 WORKDIR /migration
 COPY --from=build /bundle/ordens-migration-bundle ./ordens-migration-bundle
+RUN chmod +x ./ordens-migration-bundle
 USER app
 ENTRYPOINT ["/bin/sh", "-c", "./ordens-migration-bundle --connection \"$ConnectionStrings__DefaultConnection\""]
