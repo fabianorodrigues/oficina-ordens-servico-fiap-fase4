@@ -46,4 +46,11 @@ jobs:
           set -euo pipefail
           test -f Dockerfile
           test -f Dockerfile.migration
-          ! grep -R "kubectl\|helm\|deploy/k8s" scripts config
+          if grep -R "kubectl\|helm\|deploy/k8s" scripts config; then
+            echo "Legacy Kubernetes reference found in scripts/config." >&2
+            exit 1
+          fi
+          if grep -R --include='*.cs' "kubectl\|helm\|deploy/k8s\|/mnt/secrets-store\|secretproviderclass" src; then
+            echo "Legacy Kubernetes reference found in application source." >&2
+            exit 1
+          fi
