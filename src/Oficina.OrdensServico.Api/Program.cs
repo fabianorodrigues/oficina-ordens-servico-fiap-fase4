@@ -12,11 +12,6 @@ using Oficina.OrdensServico.Infrastructure.Persistencia;
 
 var builder = WebApplication.CreateBuilder(args);
 
-if (builder.Environment.IsProduction())
-{
-    builder.Configuration.AddKeyPerFile("/mnt/secrets-store", optional: true, reloadOnChange: false);
-}
-
 builder.Configuration.AddEnvironmentVariables();
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options =>
