@@ -1,4 +1,4 @@
-namespace Oficina.OrdensServico.Domain.Shared;
+namespace Oficina.OrdensServico.Domain.SharedKernel;
 
 public abstract class Entidade
 {

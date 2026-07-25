@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 using Oficina.OrdensServico.Application.Abstractions;
 using Oficina.OrdensServico.Application.Contracts;
 using Oficina.OrdensServico.Application.Shared;
-using Oficina.OrdensServico.Domain.Oficina;
+using Oficina.OrdensServico.Domain.Ordens;
 
 namespace Oficina.OrdensServico.Application.UseCases;
 

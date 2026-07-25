@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Oficina.OrdensServico.Application.Abstractions;
 using Oficina.OrdensServico.Application.Shared;
-using Oficina.OrdensServico.Domain.Oficina;
+using Oficina.OrdensServico.Domain.Ordens;
 using Oficina.OrdensServico.Infrastructure.Messaging;
 using Oficina.OrdensServico.Infrastructure.Persistencia;
 

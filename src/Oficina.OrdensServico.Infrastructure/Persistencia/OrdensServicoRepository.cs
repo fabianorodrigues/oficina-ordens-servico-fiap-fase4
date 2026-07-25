@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Oficina.OrdensServico.Application.Abstractions;
-using Oficina.OrdensServico.Domain.Oficina;
+using Oficina.OrdensServico.Domain.Ordens;
 
 namespace Oficina.OrdensServico.Infrastructure.Persistencia;
 
