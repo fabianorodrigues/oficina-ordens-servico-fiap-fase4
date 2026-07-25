@@ -60,3 +60,11 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Reqnroll: code-behind gerado a partir dos .feature
+*.feature.cs
+
+# Artefatos e checkouts efemeros do BDD distribuido
+artifacts/bdd/
+.bdd-checkouts/
+.env.bdd

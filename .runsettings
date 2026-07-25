@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Configuracao de cobertura do microsservico.
+
+  As exclusoes sao deliberadamente estreitas e cada uma esta justificada no
+  README. Dominio, handlers, Saga, Inbox, Outbox e caminhos de erro NAO sao
+  excluidos: excluir esses trechos inflaria o percentual sem aumentar a
+  confianca no codigo.
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <!-- Cobertura alimenta o gate local; OpenCover alimenta o SonarCloud. -->
+          <Format>cobertura,opencover</Format>
+          <SkipAutoProps>true</SkipAutoProps>
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+          <DeterministicReport>false</DeterministicReport>
+          <ExcludeByAttribute>GeneratedCodeAttribute,CompilerGeneratedAttribute,ExcludeFromCodeCoverageAttribute,DebuggerNonUserCodeAttribute</ExcludeByAttribute>
+          <!--
+            Migrations/: codigo gerado pelo EF Core, verificado pela execucao do
+            proprio Migration Job.
+            *DesignTimeDbContextFactory.cs: existe apenas para ferramentas de
+            design-time e nao e alcancavel em runtime.
+          -->
+          <ExcludeByFile>**/Migrations/*.cs,**/*DesignTimeDbContextFactory.cs</ExcludeByFile>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

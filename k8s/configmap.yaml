@@ -1,0 +1,56 @@
+# Configuracao nao sensivel do oficina-ordens-servico.
+# Os marcadores delimitados por sublinhados duplos sao resolvidos dentro da EC2,
+# no comando de Deploy, a partir dos parametros SSM publicados pela plataforma.
+#
+# Sao dois ConfigMaps por decisao: o Migration Job recebe apenas a configuracao
+# base. Dar a ele a configuracao de mensageria faria o migrator carregar
+# contexto de runtime que nao usa.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oficina-ordens-servico-config
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: oficina-ordens-servico
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: oficina
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:8080"
+  AWS_REGION: "__AWS_REGION__"
+  Authentication__Mode: ""
+  DistributedFlow__Enabled: "true"
+  Integrations__Cadastro__BaseUrl: "http://__ALB_DNS__"
+  Integrations__Estoque__BaseUrl: "http://__ALB_DNS__"
+  Messaging__Sqs__Enabled: "true"
+  Messaging__Sqs__Region: "__AWS_REGION__"
+  Messaging__Sqs__CommandsQueueName: "oficina-estoque-comandos.fifo"
+  Messaging__Sqs__EventsQueueName: "oficina-ordens-eventos.fifo"
+  Messaging__Sqs__EventsDlqQueueName: "oficina-ordens-eventos-dlq.fifo"
+  Messaging__Sqs__CommandsQueueUrl: "__COMMANDS_QUEUE_URL__"
+  Messaging__Sqs__CommandsDlqQueueUrl: "__COMMANDS_DLQ_URL__"
+  Messaging__Sqs__EventsQueueUrl: "__EVENTS_QUEUE_URL__"
+  Messaging__Sqs__EventsDlqQueueUrl: "__EVENTS_DLQ_URL__"
+  Messaging__Sqs__ConsumerConcurrency: "1"
+  Messaging__Sqs__MaxMessagesPerReceive: "1"
+  Messaging__Sqs__WaitTimeSeconds: "20"
+  Messaging__Sqs__VisibilityTimeoutSeconds: "60"
+  Payments__UseMock: "true"
+  Payments__Mode: "Mock"
+  Payments__MockBehavior: "Approved"
+  Payments__ExternalApiEnabled: "false"
+  Payments__ExternalWebhookEnabled: "false"
+  Payments__ContractStatus: "Pending"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oficina-ordens-servico-migration-config
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: oficina-ordens-servico
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: oficina
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  AWS_REGION: "__AWS_REGION__"

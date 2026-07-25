@@ -1,0 +1,86 @@
+# Deployment do oficina-ordens-servico.
+# maxSurge 0 mantem uma unica instancia por vez no node single-node: subir um
+# Pod extra competiria por CPU e memoria com o Pod que ainda serve trafego.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oficina-ordens-servico
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: oficina-ordens-servico
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: oficina
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oficina-ordens-servico
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oficina-ordens-servico
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: oficina
+      annotations:
+        oficina.io/commit: "__SHORT_SHA__"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: oficina-ordens-servico
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: oficina-ordens-servico-config
+            # Somente a credencial de aplicacao. A credencial de migration nunca
+            # e montada no Deployment.
+            - secretRef:
+                name: oficina-ordens-servico-database-app
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 150m
+              memory: 320Mi
+            limits:
+              cpu: 500m
+              memory: 640Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

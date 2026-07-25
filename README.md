@@ -6,7 +6,7 @@ Microsserviço de **ordens de serviço, orçamento e saga de pagamento** da solu
 ![ASP.NET Core](https://img.shields.io/badge/ASP.NET%20Core-API-512BD4?logo=dotnet&logoColor=white)
 ![EF Core](https://img.shields.io/badge/EF%20Core-SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white)
 ![SQS FIFO](https://img.shields.io/badge/AWS-SQS%20FIFO-FF4F8B?logo=amazonaws&logoColor=white)
-![ECS Fargate](https://img.shields.io/badge/AWS-ECS%20Fargate-FF9900?logo=amazonaws&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/AWS-EC2%20%C2%B7%20K3s-FF9900?logo=amazonaws&logoColor=white)
 ![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 
 ---
@@ -31,12 +31,12 @@ Microsserviço de **ordens de serviço, orçamento e saga de pagamento** da solu
 
 ## Visão geral
 
-A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AWS e distribuída em **6 repositórios** que compõem um único sistema. O cliente acessa uma **API Gateway HTTP**, que autentica na borda por uma **Lambda authorizer** e encaminha o tráfego, via **VPC Link**, para um **ALB interno** que roteia para três microsserviços **.NET 10 em ECS Fargate**. Os serviços se comunicam por HTTP interno e por filas **SQS FIFO**, e persistem em um **RDS SQL Server** compartilhado.
+A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AWS e distribuída em **6 repositórios** que compõem um único sistema. O cliente acessa uma **API Gateway HTTP**, que autentica na borda por uma **Lambda authorizer** e encaminha o tráfego, via **VPC Link**, para um **ALB interno** que roteia para três microsserviços **.NET 10 em Kubernetes (K3s single-node numa EC2 privada)**. Os serviços se comunicam por HTTP interno e por filas **SQS FIFO**, e persistem em um **RDS SQL Server** compartilhado.
 
 | Repositório | Responsabilidade | Etapas |
 |---|---|:---:|
 | [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4) | Rede, banco de dados, segredos e estado do Terraform | 1 e 3 |
-| [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4) | Plataforma ECS/ALB e entrada de API | 2 e 8 |
+| [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4) | Plataforma Kubernetes/ALB e entrada de API | 2 e 8 |
 | [oficina-auth-lambda](https://github.com/fabianorodrigues/oficina-auth-lambda-fiap-fase4) | Autenticação por CPF e validação de token | 4 |
 | [oficina-cadastro](https://github.com/fabianorodrigues/oficina-cadastro-fiap-fase4) | Clientes, veículos, funcionários e catálogo de serviços | 5 |
 | [oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4) | Peças, insumos, saldos e reservas | 6 |
@@ -102,7 +102,7 @@ O serviço fala com os demais de duas formas — HTTP interno (via ALB) para con
 
 ```mermaid
 flowchart LR
-    subgraph Ordens["oficina-ordens-servico · ECS Fargate"]
+    subgraph Ordens["oficina-ordens-servico · Kubernetes (K3s)"]
         direction TB
         API["API de ordens e orçamentos"]
         Saga["Coordenador da saga"]
@@ -181,17 +181,17 @@ A saga, a idempotência e a compensação são reais e exercitadas; apenas o pro
 
 | Valor | Origem | Criado por |
 |---|---|---|
-| Cluster, grupo de segurança e subnets das tasks | `/oficina/infra/cluster/name` · `/oficina/infra/ecs/task-security-group-id` · `/oficina/infra/subnets/private/{1,2}` | oficina-infra |
-| Registro de imagem, target group e grupo de log | `/oficina/infra/ecr/ordens` · `/oficina/infra/ecs/ordens/{target-group-arn,log-group-name}` | oficina-infra |
+| Node do cluster e namespace | `/oficina/infra/k8s/instance-id` · `/oficina/infra/k8s/namespace` | oficina-infra |
+| Registro de imagem, target group e NodePort | `/oficina/infra/ecr/ordens` · `/oficina/infra/services/ordens/{target-group-arn,node-port}` | oficina-infra |
 | Filas de comandos e eventos + DLQs | `/oficina/infra/sqs/{estoque-comandos,ordens-eventos}[-dlq]/url` | oficina-infra |
 | DNS do ALB interno | `/oficina/infra/alb/dns-name` | oficina-infra |
 | Credenciais de runtime e migração | `/oficina/ordens/{runtime,migration}-db` | oficina-infra-db |
 
-As integrações com cadastro e estoque apontam para o **DNS do ALB interno**; as credenciais são injetadas como **ECS secrets**.
+As integrações com cadastro e estoque apontam para o **DNS do ALB interno**; as credenciais são lidas do Secrets Manager **dentro da EC2** e materializadas como **Secrets Kubernetes**, um para o Deployment e outro para o Migration Job.
 
 ### Publica
 
-O serviço ECS Fargate no *target group* do ALB, os comandos de reserva nas filas e o esquema do banco de ordens, aplicado por uma task de migração.
+O Deployment e o Service NodePort registrados no *target group* do ALB, os comandos de reserva nas filas e o esquema do banco de ordens, aplicado por um Migration Job nomeado com o commit SHA.
 
 ---
 
@@ -203,33 +203,36 @@ Configure em **Settings → Secrets and variables → Actions** do repositório.
 |---|---|---|:---:|
 | Secret | `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` · `AWS_SESSION_TOKEN` | Credenciais temporárias da AWS | **Sim** |
 | Variable | `AWS_REGION` | Região dos recursos | **Sim** |
-| Variable | `ECS_TASK_EXECUTION_ROLE_ARN` | Role de execução das tasks ECS | **Sim** |
-| Variable | `ECS_TASK_ROLE_ARN` | Role de aplicação das tasks ECS | **Sim** |
+| Variable | `SONAR_PROJECT_KEY` · `SONAR_ORGANIZATION` | Projeto e organização no SonarCloud | **Sim** |
+| Secret | `SONAR_TOKEN` | Token de análise do SonarCloud | **Sim** |
+| Variable | `TF_STATE_BUCKET` | Fallback do bucket que recebe o pacote de manifests | Não |
 
-### Papéis IAM das tasks ECS — não provisionados automaticamente
+### Papéis IAM — não provisionados automaticamente
 
-O deploy registra *task definitions* Fargate e reutiliza duas roles IAM que **precisam existir antes da etapa 7**. Nenhum workflow da solução as cria.
+Nenhum workflow desta solução cria ou altera recursos IAM. O deploy não passa
+role alguma: os Pods herdam a role do **instance profile da EC2 do cluster**,
+configurada uma única vez em `oficina-infra` pela variável `INSTANCE_PROFILE_NAME`.
 
-| Variable | Trust | Permissões mínimas |
-|---|---|---|
-| `ECS_TASK_EXECUTION_ROLE_ARN` | `ecs-tasks.amazonaws.com` | `AmazonECSTaskExecutionRolePolicy` e `secretsmanager:GetSecretValue` nos segredos `/oficina/ordens/{runtime,migration}-db` |
-| `ECS_TASK_ROLE_ARN` | `ecs-tasks.amazonaws.com` | Ações SQS nas filas de comandos e eventos: `sqs:ReceiveMessage`, `SendMessage`, `DeleteMessage`, `GetQueueAttributes` |
+Essa role precisa permitir, no mínimo: registro no Systems Manager,
+`ecr:GetAuthorizationToken` e pull das imagens, `secretsmanager:GetSecretValue`
+nos segredos `/oficina/ordens/{runtime,migration}-db` e `ssm:GetParameter`
+com `kms:Decrypt` em `/oficina/deploy/*`.
 
 > [!NOTE]
-> É o **mesmo par de roles** usado pelo bootstrap e pelos demais serviços. Crie uma vez e reutilize nos quatro repositórios que executam tasks ECS.
-
+> Sem IRSA e sem Pod Identity, todos os Pods do namespace compartilham essa role.
+> O detalhe está registrado como risco em `docs/ARCHITECTURE.md`.
 ### Variáveis de ambiente da aplicação
 
-Definidas pelo deploy na *task definition*; nenhuma precisa ser configurada no GitHub.
+Definidas pelo deploy no ConfigMap e nos Secrets do namespace; nenhuma precisa ser configurada no GitHub.
 
 | Chave | Valor no ambiente publicado |
 |---|---|
-| `ConnectionStrings__DefaultConnection` | Injetada como ECS secret a partir do Secrets Manager |
+| `ConnectionStrings__DefaultConnection` | Materializada como Secret Kubernetes dentro da EC2, a partir do Secrets Manager |
 | `Integrations__Cadastro__BaseUrl` · `Integrations__Estoque__BaseUrl` | DNS do ALB interno |
 | `Messaging__Sqs__Enabled` · `DistributedFlow__Enabled` | **Ativados** |
 | `Messaging__Sqs__*QueueUrl` | Os quatro endereços de fila |
 | `Payments__UseMock` · `Payments__Mode` | **Mock** — integração externa desativada |
-| `Database__ApplyMigrations` | Desativado — migrações rodam em task própria |
+| `Database__ApplyMigrations` | Desativado — migrações rodam em Migration Job próprio |
 
 ---
 
@@ -239,7 +242,7 @@ Definidas pelo deploy na *task definition*; nenhuma precisa ser configurada no G
 
 **Actions → Ordens Deploy → Run workflow → `confirmation` = `DEPLOY`**
 
-Roda apenas na branch `main`. Sequência: valida a requisição, as variáveis e a integração de pagamentos → descobre cluster, registro de imagem, filas e DNS do ALB → confere que as filas são FIFO → compila e testa → constrói as imagens → varredura de vulnerabilidades → envia ao ECR → **executa a task de migração (ECS Run Task) e aguarda** → registra a *task definition* de runtime → **cria ou atualiza o serviço ECS** e aguarda ficar estável → confirma destino saudável no ALB.
+Roda apenas na branch `main`. Sequência: **BDD distribuído** → valida a requisição e a integração de pagamentos → SonarCloud begin → compila → testa com cobertura → gate local de 80% → Quality Gate → descobre registro de imagem, node, filas e DNS do ALB → constrói as imagens → varredura de vulnerabilidades → envia ao ECR → **Stage** do pacote de manifests → remove objeto S3 e SecureString → **Deploy** (imagens, ConfigMap, Secrets, Migration Job, Deployment, Service, rollout e capacidade) → confirma destino saudável no ALB.
 
 ### Etapa 9 — Collection Postman (execução manual)
 
@@ -269,7 +272,7 @@ Antes de rodar, preencha três variáveis do environment (nenhuma é versionada)
 | Serviço | O que verificar |
 |---|---|
 | **ECR** | Repositório de ordens com a imagem do commit publicado |
-| **ECS → Serviços** | `oficina-ordens-servico` estável, com a task de runtime em execução |
+| **EC2 → Instâncias** | Node do cluster `running` e `Online` no Systems Manager |
 | **SQS** | Fila de eventos sendo consumida e **DLQs vazias** |
 
 ### Pela AWS CLI
@@ -279,11 +282,11 @@ Antes de rodar, preencha três variáveis do environment (nenhuma é versionada)
 
 ```bash
 REGIAO=<sua-regiao>
-CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name \
+INSTANCIA=$(aws ssm get-parameter --name /oficina/infra/k8s/instance-id \
   --region "$REGIAO" --query 'Parameter.Value' --output text)
 
-aws ecs describe-services --cluster "$CLUSTER" --services oficina-ordens-servico \
-  --region "$REGIAO" --query 'services[0].{Status:status,Rodando:runningCount}' --output table
+aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCIA" \
+  --region "$REGIAO" --query 'InstanceInformationList[0].PingStatus' --output text
 
 # Após a etapa 8, verificação de saúde pela API pública
 API=$(aws ssm get-parameter --name /oficina/infra/api/url \
@@ -354,7 +357,7 @@ Os testes cobrem casos de uso, contratos públicos, metadados de persistência e
 ## Próxima etapa
 
 **Depois da etapa 7 (Ordens Deploy) → etapa 8, obrigatória.**
-Pré-condição: serviço `oficina-ordens-servico` estável no ECS e destino saudável no *target group*, com os três serviços no ar.
+Pré-condição: Deployment `oficina-ordens-servico` disponível no cluster e destino saudável no *target group*, com os três serviços no ar.
 **→ [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4)** — seção [Como executar → Etapa 8](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4#etapa-8--entrypoint-deploy), que publica a API Gateway e o VPC Link.
 
 **Depois da etapa 8 → etapa 9, obrigatória, aqui mesmo.**

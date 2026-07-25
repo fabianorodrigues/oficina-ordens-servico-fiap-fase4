@@ -8,7 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Oficina.OrdensServico.Api\Oficina.OrdensServico.Api.csproj" />
     <ProjectReference Include="..\..\src\Oficina.OrdensServico.Application\Oficina.OrdensServico.Application.csproj" />
+    <ProjectReference Include="..\..\src\Oficina.OrdensServico.Infrastructure\Oficina.OrdensServico.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />

@@ -8,23 +8,34 @@ on:
 permissions:
   contents: read
 
+env:
+  SOLUTION: Oficina.OrdensServico.sln
+  MIN_COVERAGE: "80"
+  SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+  SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
 jobs:
   validate:
-    name: Build and validate
+    name: Build, test, coverage and quality gate
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # O SonarCloud precisa do historico completo para atribuir issues.
+          fetch-depth: 0
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: "10.0.x"
+          global-json-file: global.json
+
       - name: Validate configuration
         shell: pwsh
-        run: |
-          ./scripts/validate-official-config.ps1
-          ./scripts/validate-payment-integration.ps1
+        run: ./scripts/validate-official-config.ps1
+
       - name: Validate PowerShell syntax
         shell: pwsh
         run: |
@@ -34,15 +45,189 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
             if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error "$($_.Extent.File): $($_.Message)" }; exit 1 }
           }
+
+      - name: Setup Java for SonarCloud
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Validate quality analysis variables
+        shell: pwsh
+        run: |
+          foreach ($name in @('SONAR_PROJECT_KEY', 'SONAR_ORGANIZATION')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Repository Variable $name is required for the quality gate."
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SONAR_TOKEN)) {
+            throw 'Secret SONAR_TOKEN is required for the quality gate.'
+          }
+
+      - name: Install SonarScanner
+        run: dotnet tool install --global dotnet-sonarscanner
+
+      - name: SonarCloud begin
+        run: |
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet sonarscanner begin \
+            /k:"$SONAR_PROJECT_KEY" \
+            /o:"$SONAR_ORGANIZATION" \
+            /d:sonar.token="$SONAR_TOKEN" \
+            /d:sonar.host.url="https://sonarcloud.io" \
+            /d:sonar.cs.opencover.reportsPaths="TestResults/**/coverage.opencover.xml" \
+            /d:sonar.cs.vstest.reportsPaths="TestResults/**/*.trx" \
+            /d:sonar.qualitygate.wait=true
+
       - name: Restore
-        run: dotnet restore Oficina.OrdensServico.sln
+        run: dotnet restore "$SOLUTION"
+
       - name: Build
-        run: dotnet build Oficina.OrdensServico.sln --configuration Release --no-restore
-      - name: Test
-        run: dotnet test Oficina.OrdensServico.sln --configuration Release --no-build
+        run: dotnet build "$SOLUTION" --configuration Release --no-restore
+
+      - name: Test with coverage
+        run: |
+          dotnet test "$SOLUTION" --configuration Release --no-build \
+            --settings .runsettings \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./TestResults \
+            --logger "trx;LogFileName=test-results.trx"
+
+      - name: Build coverage report
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-reportgenerator-globaltool >/dev/null
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          reportgenerator \
+            "-reports:TestResults/**/coverage.cobertura.xml" \
+            "-targetdir:coverage-report" \
+            "-reporttypes:Html;Cobertura;TextSummary"
+
+      - name: Enforce coverage gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # O gate local e independente do SonarCloud: cobertura abaixo do
+          # minimo reprova mesmo com o SonarCloud indisponivel.
+          $reportPath = 'coverage-report/Cobertura.xml'
+          if (-not (Test-Path -LiteralPath $reportPath)) { throw 'Relatorio de cobertura nao gerado.' }
+          [xml]$report = Get-Content -LiteralPath $reportPath -Raw
+          $linePercentage = [Math]::Round([double]$report.coverage.'line-rate' * 100, 2)
+          $minimum = [double]$env:MIN_COVERAGE
+          "Line coverage: $linePercentage%" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($linePercentage -lt $minimum) {
+            throw "Cobertura de linhas $linePercentage% abaixo do minimo exigido de $minimum%."
+          }
+
+      - name: Publish coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ github.run_id }}
+          path: |
+            coverage-report
+            TestResults/**/*.trx
+          retention-days: 7
+
+      - name: SonarCloud end and quality gate
+        run: |
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
+
       - name: Validate Dockerfiles
         shell: bash
         run: |
           set -euo pipefail
           test -f Dockerfile
           test -f Dockerfile.migration
+          # Tag imutavel derivada do commit e obrigatoria; latest esta proibido.
+          if grep -rn ':latest' Dockerfile Dockerfile.migration k8s; then
+            echo 'Uso de tag latest detectado.' >&2
+            exit 1
+          fi
+
+      - name: Validate Kubernetes manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+          render="$(mktemp -d)"
+          dryrun_b64="$(printf 'connection-string-ficticia-de-validacao' | base64 -w0)"
+
+          # Valores ficticios: a renderizacao existe para provar que nenhum
+          # placeholder sobra e que o YAML resultante e um objeto valido.
+          for file in k8s/*.yaml; do
+            sed \
+              -e "s|__NAMESPACE__|oficina|g" \
+              -e "s|__AWS_REGION__|us-east-1|g" \
+              -e "s|__IMAGE__|example.invalid/oficina-ordens-servico:0.0.0-dryrun|g" \
+              -e "s|__MIGRATION_IMAGE__|example.invalid/oficina-ordens-servico-migration:0.0.0-dryrun|g" \
+              -e "s|__SHORT_SHA__|dryrun|g" \
+              -e "s|__NODE_PORT__|30082|g" \
+              -e "s|__ALB_DNS__|alb.example.invalid|g" \
+              -e "s|__COMMANDS_QUEUE_URL__|https://sqs.example.invalid/comandos|g" \
+              -e "s|__COMMANDS_DLQ_URL__|https://sqs.example.invalid/comandos-dlq|g" \
+              -e "s|__EVENTS_QUEUE_URL__|https://sqs.example.invalid/eventos|g" \
+              -e "s|__EVENTS_DLQ_URL__|https://sqs.example.invalid/eventos-dlq|g" \
+              -e "s|__APP_CONNECTION_STRING__|$dryrun_b64|g" \
+              -e "s|__MIGRATION_CONNECTION_STRING__|$dryrun_b64|g" \
+              "$file" > "$render/$(basename "$file")"
+          done
+
+          if grep -rnE '__[A-Z0-9_]+__|\$\{[A-Z_]+\}|<[A-Z_]+>' "$render"; then
+            echo 'Placeholder nao substituido apos a renderizacao.' >&2
+            exit 1
+          fi
+
+          # kubeconform valida esquema e campos obrigatorios de forma totalmente
+          # offline. "kubectl apply --dry-run=client" nao serve aqui: ele precisa
+          # da descoberta de API contra um servidor vivo para mapear kind em
+          # resource, e o runner nao tem cluster.
+          kubeconform -strict -summary -verbose "$render"
+          rm -rf "$render"
+
+      - name: Check for retired runtime references
+        shell: bash
+        run: |
+          set -euo pipefail
+          # --exclude=ci.yml evita o auto-casamento: o proprio padrao de busca e
+          # uma ocorrencia literal dentro deste arquivo.
+          if grep -rnE 'deploy-ecs-fargate|ecs run-task|FARGATE|TaskDefinition|aws_ecs_' \
+              --include=*.yml --include=*.yaml --include=*.json --include=*.ps1 --include=*.cs \
+              --exclude=ci.yml \
+              config scripts k8s .github src; then
+            echo 'Referencia ao runtime anterior encontrada.' >&2
+            exit 1
+          fi
+
+  bdd:
+    name: Distributed BDD
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ESTOQUE_REPOSITORY: ${{ vars.ESTOQUE_REPOSITORY }}
+      ESTOQUE_REF: ${{ vars.ESTOQUE_REF }}
+      CADASTRO_REPOSITORY: ${{ vars.CADASTRO_REPOSITORY }}
+      CADASTRO_REF: ${{ vars.CADASTRO_REF }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - name: Run distributed BDD
+        shell: pwsh
+        run: ./scripts/run-bdd.ps1
+        env:
+          CROSS_REPOSITORY_TOKEN: ${{ secrets.CROSS_REPOSITORY_TOKEN }}
+      - name: Publish BDD artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-${{ github.run_id }}
+          path: |
+            artifacts/bdd
+          retention-days: 7

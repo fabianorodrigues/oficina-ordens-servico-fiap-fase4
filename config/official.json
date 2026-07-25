@@ -6,21 +6,28 @@
     "containerPort": 8080
   },
   "aws": {
-    "clusterNameParameter": "/oficina/infra/cluster/name",
+    "namespaceParameter": "/oficina/infra/k8s/namespace",
+    "instanceIdParameter": "/oficina/infra/k8s/instance-id",
     "ecrRepositoryParameter": "/oficina/infra/ecr/ordens",
     "regionFromWorkflow": true
   },
-  "ecs": {
+  "kubernetes": {
+    "deploymentName": "oficina-ordens-servico",
     "serviceName": "oficina-ordens-servico",
     "containerName": "oficina-ordens-servico",
-    "migrationContainerName": "oficina-ordens-servico-migration",
-    "desiredCount": 1,
-    "launchType": "FARGATE",
-    "targetGroupArnParameter": "/oficina/infra/ecs/ordens/target-group-arn",
-    "logGroupNameParameter": "/oficina/infra/ecs/ordens/log-group-name",
-    "taskSecurityGroupParameter": "/oficina/infra/ecs/task-security-group-id",
-    "privateSubnet1Parameter": "/oficina/infra/subnets/private/1",
-    "privateSubnet2Parameter": "/oficina/infra/subnets/private/2"
+    "migrationJobPrefix": "oficina-ordens-servico-migration",
+    "replicas": 1,
+    "nodePort": 30082,
+    "targetGroupArnParameter": "/oficina/infra/services/ordens/target-group-arn",
+    "nodePortParameter": "/oficina/infra/services/ordens/node-port",
+    "manifests": {
+      "configMap": "k8s/configmap.yaml",
+      "deployment": "k8s/deployment.yaml",
+      "service": "k8s/service.yaml",
+      "migrationJob": "k8s/migration-job.yaml",
+      "secretApp": "k8s/secret-app-template.yaml",
+      "secretMigration": "k8s/secret-migration-template.yaml"
+    }
   },
   "secrets": {
     "runtimeDatabase": "/oficina/ordens/runtime-db",
@@ -68,5 +75,16 @@
   "deployment": {
     "progressDeadlineSeconds": 600,
     "terminationGracePeriodSeconds": 30
+  },
+  "deploy": {
+    "s3Prefix": "k8s-deploy/ordens/",
+    "parameterPathPrefix": "/oficina/deploy/ordens/",
+    "presignedUrlTtlSeconds": 300,
+    "maxManifestBytes": 30000,
+    "rolloutTimeoutSeconds": 600,
+    "migrationTimeoutSeconds": 900
+  },
+  "coverage": {
+    "minimumLinePercentage": 80
   }
 }

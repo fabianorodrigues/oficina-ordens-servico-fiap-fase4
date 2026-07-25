@@ -1,0 +1,185 @@
+# Ambiente do BDD distribuido.
+#
+# Nao depende da AWS nem do ECR: as imagens de Cadastro e Estoque sao
+# construidas localmente a partir de checkouts em commit SHA fixo, cujos
+# caminhos chegam por CADASTRO_CONTEXT e ESTOQUE_CONTEXT.
+#
+# O pagamento usa o mesmo mock do ambiente AWS (Payments__UseMock=true e
+# MockBehavior=Approved), para que o fluxo validado aqui seja o fluxo entregue.
+#
+# docker-compose.local.yml permanece inalterado.
+name: oficina-fiap-fase4-bdd
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      MSSQL_PID: Developer
+    ports:
+      - "127.0.0.1:${SQLSERVER_PORT}:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/1433' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      - oficina-bdd
+
+  sql-init:
+    image: mcr.microsoft.com/mssql-tools
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      CADASTRO_DB_PASSWORD: ${CADASTRO_DB_PASSWORD}
+      ESTOQUE_DB_PASSWORD: ${ESTOQUE_DB_PASSWORD}
+      ORDENS_DB_PASSWORD: ${ORDENS_DB_PASSWORD}
+    volumes:
+      - ./docker/sql-init:/scripts:ro
+    command: ["/bin/bash", "/scripts/init-sql.sh"]
+    networks:
+      - oficina-bdd
+    restart: "no"
+
+  localstack:
+    image: localstack/localstack:3.7
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    ports:
+      - "127.0.0.1:${LOCALSTACK_HTTP_PORT}:4566"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health | grep -q 'sqs' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    networks:
+      - oficina-bdd
+
+  localstack-init:
+    image: amazon/aws-cli:2.17.58
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      LOCALSTACK_ENDPOINT: http://localstack:4566
+    volumes:
+      - ./docker/localstack:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/init-queues.sh"]
+    networks:
+      - oficina-bdd
+    restart: "no"
+
+  cadastro-api:
+    build:
+      context: ${CADASTRO_CONTEXT}
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Authentication__Mode: Development
+      Database__ApplyMigrations: "true"
+      ConnectionStrings__OficinaCadastroDb: Server=sqlserver,1433;Database=OficinaCadastroDb;User Id=oficina_cadastro_app;Password=${CADASTRO_DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=true
+      OpenTelemetry__Enabled: "false"
+    ports:
+      - "127.0.0.1:${CADASTRO_HTTP_PORT}:8080"
+    depends_on:
+      sql-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+    networks:
+      - oficina-bdd
+
+  estoque-api:
+    build:
+      context: ${ESTOQUE_CONTEXT}
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Authentication__Mode: Development
+      Database__ApplyMigrations: "true"
+      ConnectionStrings__OficinaEstoqueDb: Server=sqlserver,1433;Database=OficinaEstoqueDb;User Id=oficina_estoque_app;Password=${ESTOQUE_DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=true
+      OpenTelemetry__Enabled: "false"
+      Messaging__Sqs__Enabled: "true"
+      Messaging__Sqs__ServiceUrl: http://localstack:4566
+      Messaging__Sqs__Region: ${AWS_REGION}
+      Messaging__Sqs__AccessKey: ${AWS_ACCESS_KEY_ID}
+      Messaging__Sqs__SecretKey: ${AWS_SECRET_ACCESS_KEY}
+      Messaging__Sqs__CommandsQueueName: oficina-estoque-comandos.fifo
+      Messaging__Sqs__CommandsDlqQueueName: oficina-estoque-comandos-dlq.fifo
+      Messaging__Sqs__EventsQueueName: oficina-ordens-eventos.fifo
+    ports:
+      - "127.0.0.1:${ESTOQUE_HTTP_PORT}:8080"
+    depends_on:
+      sql-init:
+        condition: service_completed_successfully
+      localstack-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+    networks:
+      - oficina-bdd
+
+  ordens-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Authentication__Mode: Development
+      Database__ApplyMigrations: "true"
+      ConnectionStrings__OficinaOrdensServicoDb: Server=sqlserver,1433;Database=OficinaOrdensServicoDb;User Id=oficina_ordens_app;Password=${ORDENS_DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=true
+      Integrations__Cadastro__BaseUrl: http://cadastro-api:8080
+      Integrations__Estoque__BaseUrl: http://estoque-api:8080
+      DistributedFlow__Enabled: "true"
+      OpenTelemetry__Enabled: "false"
+      # Mesmo comportamento de pagamento do ambiente AWS.
+      Payments__UseMock: "true"
+      Payments__Mode: Mock
+      Payments__MockBehavior: Approved
+      Payments__ExternalApiEnabled: "false"
+      Payments__ExternalWebhookEnabled: "false"
+      Payments__ContractStatus: Pending
+      Messaging__Sqs__Enabled: "true"
+      Messaging__Sqs__ServiceUrl: http://localstack:4566
+      Messaging__Sqs__Region: ${AWS_REGION}
+      Messaging__Sqs__AccessKey: ${AWS_ACCESS_KEY_ID}
+      Messaging__Sqs__SecretKey: ${AWS_SECRET_ACCESS_KEY}
+      Messaging__Sqs__EventsQueueName: oficina-ordens-eventos.fifo
+      Messaging__Sqs__EventsDlqQueueName: oficina-ordens-eventos-dlq.fifo
+      Messaging__Sqs__CommandsQueueName: oficina-estoque-comandos.fifo
+    ports:
+      - "127.0.0.1:${ORDENS_HTTP_PORT}:8080"
+    depends_on:
+      cadastro-api:
+        condition: service_healthy
+      estoque-api:
+        condition: service_healthy
+      localstack-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+    networks:
+      - oficina-bdd
+
+networks:
+  oficina-bdd:
+    driver: bridge
