@@ -1,0 +1,3064 @@
+{
+  "info": {
+    "_postman_id": "b3f1c2d4-5a6e-4f70-9c81-0d2e3f4a5b6c",
+    "name": "Oficina - Fluxo Principal E2E",
+    "description": "Fluxo principal de sucesso da solucao Oficina, ponta a ponta, contra a API publica provisionada.\n\nCobertura: autenticacao do admin inicial, criacao/alteracao/consulta de funcionario, cliente, veiculo, peca, estoque e servico, ciclo completo da ordem de servico (Recebida -> EmDiagnostico -> AguardandoAprovacao -> EmExecucao -> Finalizada -> Entregue), saga distribuida de pagamento e reserva de estoque, validacao de idempotencia e relatorio.\n\nPre-requisitos do environment:\n  baseUrl       - URL publica da API (SSM /oficina/infra/api/url)\n  loginCpf      - CPF do admin inicial (secret ADMIN_INICIAL_CPF)\n  loginPassword - Senha do admin inicial (secret ADMIN_INICIAL_PASSWORD)\n\nTodos os demais valores sao gerados a cada execucao. Nenhum ID e fixo e nada e reaproveitado de execucoes anteriores.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{accessToken}}", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Normaliza a URL base (o parametro SSM termina com '/') e interrompe a execucao",
+          "// se ela nao estiver configurada. Propaga o correlation id em todas as chamadas.",
+          "var bruta = pm.environment.get('baseUrl') || '';",
+          "var base = String(bruta).trim().replace(/\\/+$/, '');",
+          "if (base !== bruta) { pm.environment.set('baseUrl', base); }",
+          "",
+          "if (!base) {",
+          "    try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+          "    throw new Error('Variavel obrigatoria ausente: baseUrl. Preencha com a URL publica da API (SSM /oficina/infra/api/url).');",
+          "}",
+          "",
+          "var correlationId = pm.environment.get('correlationId');",
+          "if (correlationId) {",
+          "    pm.request.headers.upsert({ key: 'X-Correlation-Id', value: correlationId });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "00 - Health e setup do run",
+      "item": [
+        {
+          "name": "01 - Health ordens e geracao dos dados do run",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// ---------------------------------------------------------------------",
+                  "// Setup da execucao. Interrompe se faltar credencial e apaga tudo que",
+                  "// execucoes anteriores deixaram no environment, garantindo que nenhum",
+                  "// identificador seja reaproveitado.",
+                  "// ---------------------------------------------------------------------",
+                  "function parar(mensagem) {",
+                  "    try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "    throw new Error(mensagem);",
+                  "}",
+                  "",
+                  "['loginCpf', 'loginPassword'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        parar('Variavel obrigatoria ausente: ' + chave + '. Preencha com as credenciais do admin inicial (ADMIN_INICIAL_CPF / ADMIN_INICIAL_PASSWORD).');",
+                  "    }",
+                  "});",
+                  "",
+                  "[",
+                  "    'accessToken', 'adminAccessToken',",
+                  "    'funcionarioId', 'funcionarioCpf', 'funcionarioNome', 'funcionarioNomeAtualizado',",
+                  "    'funcionarioPassword', 'funcionarioPasswordNova',",
+                  "    'clienteId', 'clienteCpf', 'clienteNome', 'clienteNomeAtualizado', 'clienteEmail',",
+                  "    'clienteTelefone', 'clienteTelefoneAtualizado',",
+                  "    'veiculoId', 'placa', 'renavam', 'modeloDescricao', 'modeloDescricaoAtualizado',",
+                  "    'pecaId', 'pecaPrecoUnitario', 'servicoId', 'servicoMaoDeObra',",
+                  "    'ordemId', 'orcamentoId', 'idempotencyKey',",
+                  "    'initialStock', 'finalStock', 'sagaPollAttempt'",
+                  "].forEach(function (chave) { pm.environment.unset(chave); });",
+                  "",
+                  "// ---------------------------------------------------------------------",
+                  "// Geradores de dados unicos por execucao.",
+                  "// ---------------------------------------------------------------------",
+                  "function aleatorio(max) { return Math.floor(Math.random() * max); }",
+                  "",
+                  "// CPF com digitos verificadores validos: o Lambda de autenticacao valida DV.",
+                  "function gerarCpf() {",
+                  "    var digitos = [];",
+                  "    for (var i = 0; i < 9; i++) { digitos.push(aleatorio(10)); }",
+                  "    if (digitos.every(function (d) { return d === digitos[0]; })) { digitos[0] = (digitos[0] + 1) % 10; }",
+                  "",
+                  "    var soma = 0;",
+                  "    for (var j = 0; j < 9; j++) { soma += digitos[j] * (10 - j); }",
+                  "    var dv1 = (soma * 10) % 11;",
+                  "    if (dv1 === 10) { dv1 = 0; }",
+                  "    digitos.push(dv1);",
+                  "",
+                  "    soma = 0;",
+                  "    for (var k = 0; k < 10; k++) { soma += digitos[k] * (11 - k); }",
+                  "    var dv2 = (soma * 10) % 11;",
+                  "    if (dv2 === 10) { dv2 = 0; }",
+                  "    digitos.push(dv2);",
+                  "",
+                  "    return digitos.join('');",
+                  "}",
+                  "",
+                  "// Placa: 7 alfanumericos maiusculos (indice unico em Veiculos.Placa).",
+                  "function gerarPlaca() {",
+                  "    var letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';",
+                  "    var placa = '';",
+                  "    for (var i = 0; i < 3; i++) { placa += letras.charAt(aleatorio(letras.length)); }",
+                  "    for (var j = 0; j < 4; j++) { placa += String(aleatorio(10)); }",
+                  "    return placa;",
+                  "}",
+                  "",
+                  "// RENAVAM: 11 digitos (indice unico em Veiculos.Renavam).",
+                  "function gerarRenavam() {",
+                  "    var valor = '';",
+                  "    for (var i = 0; i < 11; i++) { valor += String(aleatorio(10)); }",
+                  "    return valor;",
+                  "}",
+                  "",
+                  "function gerarSenha() {",
+                  "    return 'E2e!' + Math.random().toString(36).slice(2, 12) + aleatorio(1000);",
+                  "}",
+                  "",
+                  "var runId = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);",
+                  "pm.environment.set('runId', runId);",
+                  "pm.environment.set('correlationId', 'postman-e2e-' + runId);",
+                  "pm.environment.set('sagaPollAttempt', '0');",
+                  "",
+                  "pm.environment.set('funcionarioCpf', gerarCpf());",
+                  "pm.environment.set('funcionarioPassword', gerarSenha());",
+                  "pm.environment.set('funcionarioPasswordNova', gerarSenha());",
+                  "pm.environment.set('funcionarioNome', 'Funcionario E2E ' + runId);",
+                  "pm.environment.set('funcionarioNomeAtualizado', 'Funcionario E2E ' + runId + ' (atualizado)');",
+                  "",
+                  "pm.environment.set('clienteCpf', gerarCpf());",
+                  "pm.environment.set('clienteNome', 'Cliente E2E ' + runId);",
+                  "pm.environment.set('clienteNomeAtualizado', 'Cliente E2E ' + runId + ' (atualizado)');",
+                  "pm.environment.set('clienteEmail', 'cliente-' + runId + '@example.com');",
+                  "pm.environment.set('clienteTelefone', '11999990000');",
+                  "pm.environment.set('clienteTelefoneAtualizado', '11988887777');",
+                  "",
+                  "pm.environment.set('placa', gerarPlaca());",
+                  "pm.environment.set('renavam', gerarRenavam());",
+                  "pm.environment.set('modeloDescricao', 'Hatch E2E ' + runId);",
+                  "pm.environment.set('modeloDescricaoAtualizado', 'Sedan E2E ' + runId);",
+                  "",
+                  "pm.request.headers.upsert({ key: 'X-Correlation-Id', value: pm.environment.get('correlationId') });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Servico de ordens saudavel', function () {",
+                  "    pm.expect(body.status, 'status').to.eql('Healthy');",
+                  "    pm.expect(body.service, 'service').to.eql('oficina-ordens-servico');",
+                  "});",
+                  "",
+                  "pm.test('Dados unicos do run gerados', function () {",
+                  "    pm.expect(pm.environment.get('runId'), 'runId').to.be.a('string').and.not.empty;",
+                  "    pm.expect(pm.environment.get('correlationId'), 'correlationId').to.be.a('string').and.not.empty;",
+                  "    pm.expect(pm.environment.get('funcionarioCpf'), 'funcionarioCpf').to.match(/^[0-9]{11}$/);",
+                  "    pm.expect(pm.environment.get('clienteCpf'), 'clienteCpf').to.match(/^[0-9]{11}$/);",
+                  "    pm.expect(pm.environment.get('placa'), 'placa').to.match(/^[A-Z0-9]{7}$/);",
+                  "    pm.expect(pm.environment.get('renavam'), 'renavam').to.match(/^[0-9]{11}$/);",
+                  "});",
+                  "",
+                  "pm.test('Nenhum identificador herdado de execucao anterior', function () {",
+                  "    ['clienteId', 'veiculoId', 'pecaId', 'servicoId', 'ordemId', 'orcamentoId', 'funcionarioId'].forEach(function (chave) {",
+                  "        pm.expect(pm.environment.get(chave), chave).to.be.oneOf([undefined, null, '']);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health/ordens", "host": ["{{baseUrl}}"], "path": ["health", "ordens"] },
+            "description": "Confirma que o servico de ordens esta no ar e prepara todos os dados unicos da execucao."
+          }
+        },
+        {
+          "name": "02 - Health cadastro",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Servico de cadastro saudavel', function () {",
+                  "    pm.expect(body.status, 'status').to.eql('Healthy');",
+                  "    pm.expect(body.service, 'service').to.eql('oficina-cadastro');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health/cadastro", "host": ["{{baseUrl}}"], "path": ["health", "cadastro"] }
+          }
+        },
+        {
+          "name": "03 - Health estoque",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Servico de estoque saudavel', function () {",
+                  "    pm.expect(body.status, 'status').to.eql('Healthy');",
+                  "    pm.expect(body.service, 'service').to.eql('oficina-estoque');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health/estoque", "host": ["{{baseUrl}}"], "path": ["health", "estoque"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 - Admin inicial e funcionario",
+      "item": [
+        {
+          "name": "04 - Login do admin inicial",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['loginCpf', 'loginPassword'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe() + ' | Verifique loginCpf/loginPassword e se o admin inicial foi provisionado.').to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Token JWT retornado', function () {",
+                  "    pm.expect(body.accessToken, 'accessToken').to.be.a('string').and.not.empty;",
+                  "    pm.expect(String(body.accessToken).split('.'), 'accessToken deve ter 3 segmentos').to.have.lengthOf(3);",
+                  "    pm.expect(body.tokenType, 'tokenType').to.eql('Bearer');",
+                  "    pm.expect(body.expiresIn, 'expiresIn').to.be.a('number').and.to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('Perfil retornado e Admin', function () {",
+                  "    pm.expect(body.user, 'user').to.be.an('object');",
+                  "    pm.expect(body.user.role, 'user.role').to.eql('Admin');",
+                  "});",
+                  "",
+                  "if (body.accessToken) { pm.environment.set('adminAccessToken', body.accessToken); }",
+                  "",
+                  "pm.test('adminAccessToken salvo no environment', function () {",
+                  "    pm.expect(pm.environment.get('adminAccessToken'), 'adminAccessToken').to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"{{loginCpf}}\",\n  \"password\": \"{{loginPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/cpf", "host": ["{{baseUrl}}"], "path": ["api", "auth", "cpf"] },
+            "description": "Autentica o admin inicial provisionado pelo job do workflow de bootstrap do banco."
+          }
+        },
+        {
+          "name": "05 - Criar funcionario",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioCpf', 'funcionarioPassword'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "var GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;",
+                  "",
+                  "pm.test('HTTP 201', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(201);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Funcionario criado com identificador e estado esperados', function () {",
+                  "    pm.expect(String(body.id), 'id').to.match(GUID);",
+                  "    pm.expect(body.cpf, 'cpf').to.eql(pm.environment.get('funcionarioCpf'));",
+                  "    pm.expect(body.perfil, 'perfil').to.eql('Funcionario');",
+                  "    pm.expect(body.ativo, 'ativo').to.eql(true);",
+                  "});",
+                  "",
+                  "if (body.id) { pm.environment.set('funcionarioId', body.id); }",
+                  "",
+                  "pm.test('funcionarioId salvo no environment', function () {",
+                  "    pm.expect(String(pm.environment.get('funcionarioId')), 'funcionarioId').to.match(GUID);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"{{funcionarioNome}}\",\n  \"cpf\": \"{{funcionarioCpf}}\",\n  \"senha\": \"{{funcionarioPassword}}\",\n  \"perfil\": \"Funcionario\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios"] },
+            "description": "Rota AdminOnly. O funcionario criado aqui conduz todo o fluxo operacional seguinte."
+          }
+        },
+        {
+          "name": "06 - Obter funcionario",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Funcionario consultado confere com o criado', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('funcionarioId'));",
+                  "    pm.expect(body.cpf, 'cpf').to.eql(pm.environment.get('funcionarioCpf'));",
+                  "    pm.expect(body.nome, 'nome').to.eql(pm.environment.get('funcionarioNome'));",
+                  "    pm.expect(body.perfil, 'perfil').to.eql('Funcionario');",
+                  "    pm.expect(body.ativo, 'ativo').to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios/{{funcionarioId}}", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios", "{{funcionarioId}}"] }
+          }
+        },
+        {
+          "name": "07 - Listar funcionarios",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = [];",
+                  "pm.test('Corpo e uma lista JSON valida', function () {",
+                  "    body = pm.response.json();",
+                  "    pm.expect(body, 'lista de funcionarios').to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Lista contem o funcionario criado neste run', function () {",
+                  "    var alvo = pm.environment.get('funcionarioId');",
+                  "    var encontrado = body.filter(function (f) { return String(f.id) === alvo; });",
+                  "    pm.expect(encontrado.length, 'ocorrencias de ' + alvo).to.eql(1);",
+                  "    pm.expect(encontrado[0].perfil, 'perfil').to.eql('Funcionario');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios"] }
+          }
+        },
+        {
+          "name": "08 - Login do funcionario",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['funcionarioCpf', 'funcionarioPassword'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Token JWT do funcionario retornado', function () {",
+                  "    pm.expect(body.accessToken, 'accessToken').to.be.a('string').and.not.empty;",
+                  "    pm.expect(String(body.accessToken).split('.'), 'accessToken deve ter 3 segmentos').to.have.lengthOf(3);",
+                  "    pm.expect(body.tokenType, 'tokenType').to.eql('Bearer');",
+                  "    pm.expect(body.expiresIn, 'expiresIn').to.be.a('number').and.to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('Perfil retornado e Funcionario', function () {",
+                  "    pm.expect(body.user, 'user').to.be.an('object');",
+                  "    pm.expect(body.user.role, 'user.role').to.eql('Funcionario');",
+                  "    pm.expect(body.user.name, 'user.name').to.eql(pm.environment.get('funcionarioNome'));",
+                  "});",
+                  "",
+                  "if (body.accessToken) { pm.environment.set('accessToken', body.accessToken); }",
+                  "",
+                  "pm.test('accessToken salvo no environment', function () {",
+                  "    pm.expect(pm.environment.get('accessToken'), 'accessToken').to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"{{funcionarioCpf}}\",\n  \"password\": \"{{funcionarioPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/cpf", "host": ["{{baseUrl}}"], "path": ["api", "auth", "cpf"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Cadastro de cliente e veiculo",
+      "item": [
+        {
+          "name": "09 - Criar cliente",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'clienteCpf'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "var GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;",
+                  "",
+                  "pm.test('HTTP 201', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(201);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Cliente criado retorna identificador', function () {",
+                  "    pm.expect(String(body.id), 'id').to.match(GUID);",
+                  "});",
+                  "",
+                  "if (body.id) { pm.environment.set('clienteId', body.id); }",
+                  "",
+                  "pm.test('clienteId salvo no environment', function () {",
+                  "    pm.expect(String(pm.environment.get('clienteId')), 'clienteId').to.match(GUID);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpfCnpj\": \"{{clienteCpf}}\",\n  \"nome\": \"{{clienteNome}}\",\n  \"email\": \"{{clienteEmail}}\",\n  \"telefone\": \"{{clienteTelefone}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/clientes", "host": ["{{baseUrl}}"], "path": ["api", "clientes"] }
+          }
+        },
+        {
+          "name": "10 - Obter cliente",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'clienteId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Cliente consultado confere com o criado', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('clienteId'));",
+                  "    pm.expect(body.cpfCnpj, 'cpfCnpj').to.eql(pm.environment.get('clienteCpf'));",
+                  "    pm.expect(body.nome, 'nome').to.eql(pm.environment.get('clienteNome'));",
+                  "    pm.expect(body.contato, 'contato').to.be.an('object');",
+                  "    pm.expect(body.contato.email, 'contato.email').to.eql(pm.environment.get('clienteEmail'));",
+                  "    pm.expect(body.contato.telefone, 'contato.telefone').to.eql(pm.environment.get('clienteTelefone'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/clientes/{{clienteId}}", "host": ["{{baseUrl}}"], "path": ["api", "clientes", "{{clienteId}}"] }
+          }
+        },
+        {
+          "name": "11 - Atualizar cliente",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'clienteId', 'clienteNomeAtualizado'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpfCnpj\": \"{{clienteCpf}}\",\n  \"nome\": \"{{clienteNomeAtualizado}}\",\n  \"email\": \"{{clienteEmail}}\",\n  \"telefone\": \"{{clienteTelefoneAtualizado}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/clientes/{{clienteId}}", "host": ["{{baseUrl}}"], "path": ["api", "clientes", "{{clienteId}}"] }
+          }
+        },
+        {
+          "name": "12 - Obter cliente atualizado",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'clienteId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Alteracao do cliente foi persistida', function () {",
+                  "    pm.expect(body.nome, 'nome').to.eql(pm.environment.get('clienteNomeAtualizado'));",
+                  "    pm.expect(body.contato.telefone, 'contato.telefone').to.eql(pm.environment.get('clienteTelefoneAtualizado'));",
+                  "    pm.expect(body.cpfCnpj, 'cpfCnpj preservado').to.eql(pm.environment.get('clienteCpf'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/clientes/{{clienteId}}", "host": ["{{baseUrl}}"], "path": ["api", "clientes", "{{clienteId}}"] }
+          }
+        },
+        {
+          "name": "13 - Listar clientes",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'clienteId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = [];",
+                  "pm.test('Corpo e uma lista JSON valida', function () {",
+                  "    body = pm.response.json();",
+                  "    pm.expect(body, 'lista de clientes').to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Lista contem o cliente deste run', function () {",
+                  "    var alvo = pm.environment.get('clienteId');",
+                  "    var encontrado = body.filter(function (c) { return String(c.id) === alvo; });",
+                  "    pm.expect(encontrado.length, 'ocorrencias de ' + alvo).to.eql(1);",
+                  "    pm.expect(encontrado[0].cpfCnpj, 'cpfCnpj').to.eql(pm.environment.get('clienteCpf'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/clientes", "host": ["{{baseUrl}}"], "path": ["api", "clientes"] }
+          }
+        },
+        {
+          "name": "14 - Criar veiculo",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'clienteId', 'placa', 'renavam'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "var GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;",
+                  "",
+                  "pm.test('HTTP 201', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(201);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Veiculo criado retorna identificador', function () {",
+                  "    pm.expect(String(body.id), 'id').to.match(GUID);",
+                  "});",
+                  "",
+                  "if (body.id) { pm.environment.set('veiculoId', body.id); }",
+                  "",
+                  "pm.test('veiculoId salvo no environment', function () {",
+                  "    pm.expect(String(pm.environment.get('veiculoId')), 'veiculoId').to.match(GUID);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clienteId\": \"{{clienteId}}\",\n  \"placa\": \"{{placa}}\",\n  \"renavam\": \"{{renavam}}\",\n  \"modelo\": {\n    \"descricao\": \"{{modeloDescricao}}\",\n    \"marca\": \"Oficina\",\n    \"ano\": 2024\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/veiculos", "host": ["{{baseUrl}}"], "path": ["api", "veiculos"] }
+          }
+        },
+        {
+          "name": "15 - Obter veiculo",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'veiculoId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Veiculo pertence ao cliente e confere com o criado', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('veiculoId'));",
+                  "    pm.expect(String(body.clienteId), 'clienteId').to.eql(pm.environment.get('clienteId'));",
+                  "    pm.expect(body.placa, 'placa').to.eql(pm.environment.get('placa'));",
+                  "    pm.expect(body.renavam, 'renavam').to.eql(pm.environment.get('renavam'));",
+                  "    pm.expect(body.modelo, 'modelo').to.be.an('object');",
+                  "    pm.expect(body.modelo.descricao, 'modelo.descricao').to.eql(pm.environment.get('modeloDescricao'));",
+                  "    pm.expect(body.modelo.ano, 'modelo.ano').to.eql(2024);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/veiculos/{{veiculoId}}", "host": ["{{baseUrl}}"], "path": ["api", "veiculos", "{{veiculoId}}"] }
+          }
+        },
+        {
+          "name": "16 - Atualizar veiculo",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'veiculoId', 'placa', 'renavam', 'modeloDescricaoAtualizado'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"placa\": \"{{placa}}\",\n  \"renavam\": \"{{renavam}}\",\n  \"modelo\": {\n    \"descricao\": \"{{modeloDescricaoAtualizado}}\",\n    \"marca\": \"Oficina\",\n    \"ano\": 2025\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/veiculos/{{veiculoId}}", "host": ["{{baseUrl}}"], "path": ["api", "veiculos", "{{veiculoId}}"] },
+            "description": "Placa e RENAVAM sao reenviados sem alteracao: a ordem de servico depende deles para localizar o veiculo."
+          }
+        },
+        {
+          "name": "17 - Obter veiculo atualizado",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'veiculoId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Alteracao do modelo foi persistida e a placa preservada', function () {",
+                  "    pm.expect(body.modelo.descricao, 'modelo.descricao').to.eql(pm.environment.get('modeloDescricaoAtualizado'));",
+                  "    pm.expect(body.modelo.ano, 'modelo.ano').to.eql(2025);",
+                  "    pm.expect(body.placa, 'placa preservada').to.eql(pm.environment.get('placa'));",
+                  "    pm.expect(body.renavam, 'renavam preservado').to.eql(pm.environment.get('renavam'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/veiculos/{{veiculoId}}", "host": ["{{baseUrl}}"], "path": ["api", "veiculos", "{{veiculoId}}"] }
+          }
+        },
+        {
+          "name": "18 - Listar veiculos",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'veiculoId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = [];",
+                  "pm.test('Corpo e uma lista JSON valida', function () {",
+                  "    body = pm.response.json();",
+                  "    pm.expect(body, 'lista de veiculos').to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Lista contem o veiculo deste run', function () {",
+                  "    var alvo = pm.environment.get('veiculoId');",
+                  "    var encontrado = body.filter(function (v) { return String(v.id) === alvo; });",
+                  "    pm.expect(encontrado.length, 'ocorrencias de ' + alvo).to.eql(1);",
+                  "    pm.expect(encontrado[0].placa, 'placa').to.eql(pm.environment.get('placa'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/veiculos", "host": ["{{baseUrl}}"], "path": ["api", "veiculos"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Estoque e peca",
+      "item": [
+        {
+          "name": "19 - Criar peca",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'runId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "var GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;",
+                  "",
+                  "pm.test('HTTP 201', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(201);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Peca criada retorna identificador', function () {",
+                  "    pm.expect(String(body.id), 'id').to.match(GUID);",
+                  "});",
+                  "",
+                  "if (body.id) { pm.environment.set('pecaId', body.id); }",
+                  "",
+                  "pm.test('pecaId salvo no environment', function () {",
+                  "    pm.expect(String(pm.environment.get('pecaId')), 'pecaId').to.match(GUID);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"precoUnitario\": 49.90,\n  \"descricao\": \"Peca E2E {{runId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/pecas", "host": ["{{baseUrl}}"], "path": ["api", "pecas"] },
+            "description": "Cadastrar a peca ja cria o registro de estoque zerado, permitindo o ajuste em seguida."
+          }
+        },
+        {
+          "name": "20 - Obter peca",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Peca consultada confere com a criada', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('pecaId'));",
+                  "    pm.expect(Number(body.precoUnitario), 'precoUnitario').to.eql(49.90);",
+                  "    pm.expect(body.descricao, 'descricao').to.eql('Peca E2E ' + pm.environment.get('runId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pecas/{{pecaId}}", "host": ["{{baseUrl}}"], "path": ["api", "pecas", "{{pecaId}}"] }
+          }
+        },
+        {
+          "name": "21 - Atualizar peca",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});",
+                  "",
+                  "// Preco novo alimenta a conferencia aritmetica do total do orcamento.",
+                  "pm.environment.set('pecaPrecoUnitario', '75.50');",
+                  "",
+                  "pm.test('pecaPrecoUnitario salvo no environment', function () {",
+                  "    pm.expect(Number(pm.environment.get('pecaPrecoUnitario')), 'pecaPrecoUnitario').to.eql(75.50);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"precoUnitario\": 75.50,\n  \"descricao\": \"Peca E2E {{runId}} atualizada\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/pecas/{{pecaId}}", "host": ["{{baseUrl}}"], "path": ["api", "pecas", "{{pecaId}}"] }
+          }
+        },
+        {
+          "name": "22 - Obter peca atualizada",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId', 'pecaPrecoUnitario'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Alteracao da peca foi persistida', function () {",
+                  "    pm.expect(Number(body.precoUnitario), 'precoUnitario').to.eql(Number(pm.environment.get('pecaPrecoUnitario')));",
+                  "    pm.expect(body.descricao, 'descricao').to.eql('Peca E2E ' + pm.environment.get('runId') + ' atualizada');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pecas/{{pecaId}}", "host": ["{{baseUrl}}"], "path": ["api", "pecas", "{{pecaId}}"] }
+          }
+        },
+        {
+          "name": "23 - Listar pecas",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = [];",
+                  "pm.test('Corpo e uma lista JSON valida', function () {",
+                  "    body = pm.response.json();",
+                  "    pm.expect(body, 'lista de pecas').to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Lista contem a peca deste run', function () {",
+                  "    var alvo = pm.environment.get('pecaId');",
+                  "    var encontrado = body.filter(function (p) { return String(p.id) === alvo; });",
+                  "    pm.expect(encontrado.length, 'ocorrencias de ' + alvo).to.eql(1);",
+                  "    pm.expect(Number(encontrado[0].precoUnitario), 'precoUnitario').to.eql(Number(pm.environment.get('pecaPrecoUnitario')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pecas", "host": ["{{baseUrl}}"], "path": ["api", "pecas"] }
+          }
+        },
+        {
+          "name": "24 - Ajustar estoque da peca",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId', 'estoqueAjusteQuantidade'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantidade\": {{estoqueAjusteQuantidade}}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/estoque/pecas/{{pecaId}}/ajustar", "host": ["{{baseUrl}}"], "path": ["api", "estoque", "pecas", "{{pecaId}}", "ajustar"] }
+          }
+        },
+        {
+          "name": "25 - Estoque inicial da peca",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId', 'estoqueAjusteQuantidade'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Saldo reflete exatamente o ajuste aplicado', function () {",
+                  "    pm.expect(String(body.pecaId), 'pecaId').to.eql(pm.environment.get('pecaId'));",
+                  "    pm.expect(body.quantidade, 'quantidade').to.eql(Number(pm.environment.get('estoqueAjusteQuantidade')));",
+                  "});",
+                  "",
+                  "if (typeof body.quantidade === 'number') { pm.environment.set('initialStock', String(body.quantidade)); }",
+                  "",
+                  "pm.test('initialStock salvo no environment', function () {",
+                  "    pm.expect(Number(pm.environment.get('initialStock')), 'initialStock').to.be.a('number').and.to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/estoque/pecas/{{pecaId}}", "host": ["{{baseUrl}}"], "path": ["api", "estoque", "pecas", "{{pecaId}}"] }
+          }
+        },
+        {
+          "name": "26 - Listar estoque",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId', 'initialStock'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido com listas de pecas e insumos', function () {",
+                  "    body = pm.response.json();",
+                  "    pm.expect(body.pecas, 'pecas').to.be.an('array');",
+                  "    pm.expect(body.insumos, 'insumos').to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Estoque geral contem a peca deste run', function () {",
+                  "    var alvo = pm.environment.get('pecaId');",
+                  "    var encontrado = (body.pecas || []).filter(function (p) { return String(p.pecaId) === alvo; });",
+                  "    pm.expect(encontrado.length, 'ocorrencias de ' + alvo).to.eql(1);",
+                  "    pm.expect(encontrado[0].quantidade, 'quantidade').to.eql(Number(pm.environment.get('initialStock')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/estoque", "host": ["{{baseUrl}}"], "path": ["api", "estoque"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Servico",
+      "item": [
+        {
+          "name": "27 - Criar servico",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId', 'pecaQuantidadeServico'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "var GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;",
+                  "",
+                  "pm.test('HTTP 201', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(201);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Servico criado retorna identificador', function () {",
+                  "    pm.expect(String(body.id), 'id').to.match(GUID);",
+                  "});",
+                  "",
+                  "if (body.id) { pm.environment.set('servicoId', body.id); }",
+                  "",
+                  "pm.test('servicoId salvo no environment', function () {",
+                  "    pm.expect(String(pm.environment.get('servicoId')), 'servicoId').to.match(GUID);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"maoDeObra\": 150.00,\n  \"pecas\": [\n    { \"id\": \"{{pecaId}}\", \"quantidade\": {{pecaQuantidadeServico}} }\n  ],\n  \"insumos\": []\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/servicos", "host": ["{{baseUrl}}"], "path": ["api", "servicos"] }
+          }
+        },
+        {
+          "name": "28 - Obter servico",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'servicoId', 'pecaId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Servico consultado traz a receita de pecas', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('servicoId'));",
+                  "    pm.expect(Number(body.maoDeObra), 'maoDeObra').to.eql(150.00);",
+                  "    pm.expect(body.pecas, 'pecas').to.be.an('array').that.has.lengthOf(1);",
+                  "    pm.expect(String(body.pecas[0].id), 'pecas[0].id').to.eql(pm.environment.get('pecaId'));",
+                  "    pm.expect(body.pecas[0].quantidade, 'pecas[0].quantidade').to.eql(Number(pm.environment.get('pecaQuantidadeServico')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/servicos/{{servicoId}}", "host": ["{{baseUrl}}"], "path": ["api", "servicos", "{{servicoId}}"] }
+          }
+        },
+        {
+          "name": "29 - Atualizar servico",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'servicoId', 'pecaId', 'pecaQuantidadeServico'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});",
+                  "",
+                  "// Mao de obra nova alimenta a conferencia aritmetica do total do orcamento.",
+                  "pm.environment.set('servicoMaoDeObra', '225.50');",
+                  "",
+                  "pm.test('servicoMaoDeObra salvo no environment', function () {",
+                  "    pm.expect(Number(pm.environment.get('servicoMaoDeObra')), 'servicoMaoDeObra').to.eql(225.50);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"maoDeObra\": 225.50,\n  \"pecas\": [\n    { \"id\": \"{{pecaId}}\", \"quantidade\": {{pecaQuantidadeServico}} }\n  ],\n  \"insumos\": []\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/servicos/{{servicoId}}", "host": ["{{baseUrl}}"], "path": ["api", "servicos", "{{servicoId}}"] },
+            "description": "A receita de pecas e reenviada porque a atualizacao substitui a lista inteira."
+          }
+        },
+        {
+          "name": "30 - Obter servico atualizado",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'servicoId', 'servicoMaoDeObra'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Alteracao do servico foi persistida e a receita preservada', function () {",
+                  "    pm.expect(Number(body.maoDeObra), 'maoDeObra').to.eql(Number(pm.environment.get('servicoMaoDeObra')));",
+                  "    pm.expect(body.pecas, 'pecas').to.be.an('array').that.has.lengthOf(1);",
+                  "    pm.expect(String(body.pecas[0].id), 'pecas[0].id').to.eql(pm.environment.get('pecaId'));",
+                  "    pm.expect(body.pecas[0].quantidade, 'pecas[0].quantidade').to.eql(Number(pm.environment.get('pecaQuantidadeServico')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/servicos/{{servicoId}}", "host": ["{{baseUrl}}"], "path": ["api", "servicos", "{{servicoId}}"] }
+          }
+        },
+        {
+          "name": "31 - Listar servicos",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'servicoId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = [];",
+                  "pm.test('Corpo e uma lista JSON valida', function () {",
+                  "    body = pm.response.json();",
+                  "    pm.expect(body, 'lista de servicos').to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Lista contem o servico deste run', function () {",
+                  "    var alvo = pm.environment.get('servicoId');",
+                  "    var encontrado = body.filter(function (s) { return String(s.id) === alvo; });",
+                  "    pm.expect(encontrado.length, 'ocorrencias de ' + alvo).to.eql(1);",
+                  "    pm.expect(Number(encontrado[0].maoDeObra), 'maoDeObra').to.eql(Number(pm.environment.get('servicoMaoDeObra')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/servicos", "host": ["{{baseUrl}}"], "path": ["api", "servicos"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Ordem de servico e saga distribuida",
+      "item": [
+        {
+          "name": "32 - Abrir ordem de servico",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'clienteCpf', 'placa', 'renavam'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "var GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;",
+                  "",
+                  "pm.test('HTTP 201', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(201);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Ordem aberta no estado Recebida e sem orcamento', function () {",
+                  "    pm.expect(String(body.id), 'id').to.match(GUID);",
+                  "    pm.expect(body.status, 'status').to.eql('Recebida');",
+                  "    pm.expect(Number(body.total), 'total').to.eql(0);",
+                  "});",
+                  "",
+                  "if (body.id) {",
+                  "    pm.environment.set('ordemId', body.id);",
+                  "    // Chave de idempotencia real do dominio (FluxoDistribuidoOrdens.ChavePagamento).",
+                  "    pm.environment.set('idempotencyKey', 'ordem-servico:' + body.id + ':pagamento');",
+                  "}",
+                  "",
+                  "pm.test('ordemId e idempotencyKey salvos no environment', function () {",
+                  "    pm.expect(String(pm.environment.get('ordemId')), 'ordemId').to.match(GUID);",
+                  "    pm.expect(pm.environment.get('idempotencyKey'), 'idempotencyKey').to.eql('ordem-servico:' + pm.environment.get('ordemId') + ':pagamento');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cliente\": {\n    \"nome\": \"{{clienteNomeAtualizado}}\",\n    \"documento\": \"{{clienteCpf}}\",\n    \"email\": \"{{clienteEmail}}\",\n    \"telefone\": \"{{clienteTelefoneAtualizado}}\"\n  },\n  \"veiculo\": {\n    \"placa\": \"{{placa}}\",\n    \"renavam\": \"{{renavam}}\",\n    \"modelo\": {\n      \"descricao\": \"{{modeloDescricaoAtualizado}}\",\n      \"marca\": \"Oficina\",\n      \"ano\": 2025\n    }\n  },\n  \"itens\": {\n    \"servicos\": [],\n    \"pecas\": [],\n    \"insumos\": []\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico"] },
+            "description": "Abertura sem tipoManutencao e sem itens: a OS fica Recebida e sem orcamento, unico caminho que permite exercitar /classificar e /diagnostico na mesma execucao."
+          }
+        },
+        {
+          "name": "33 - Classificar como corretiva",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoManutencao\": \"Corretiva\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}/classificar", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}", "classificar"] }
+          }
+        },
+        {
+          "name": "34 - Status apos classificacao",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Ordem corretiva entrou em diagnostico', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('ordemId'));",
+                  "    pm.expect(body.status, 'status').to.eql('EmDiagnostico');",
+                  "    pm.expect(body.tipoManutencao, 'tipoManutencao').to.eql('Corretiva');",
+                  "    pm.expect(body.dataUltimaAtualizacao, 'dataUltimaAtualizacao').to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}/status", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}", "status"] }
+          }
+        },
+        {
+          "name": "35 - Registrar diagnostico",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId', 'servicoId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "var GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Diagnostico gerou o orcamento', function () {",
+                  "    pm.expect(String(body.orcamentoId), 'orcamentoId').to.match(GUID);",
+                  "});",
+                  "",
+                  "if (body.orcamentoId) { pm.environment.set('orcamentoId', body.orcamentoId); }",
+                  "",
+                  "pm.test('orcamentoId salvo no environment', function () {",
+                  "    pm.expect(String(pm.environment.get('orcamentoId')), 'orcamentoId').to.match(GUID);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"descricao\": \"Diagnostico E2E {{runId}}: ruido na suspensao dianteira.\",\n  \"servicoIds\": [\"{{servicoId}}\"]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}/diagnostico", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}", "diagnostico"] }
+          }
+        },
+        {
+          "name": "36 - Obter orcamento",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'orcamentoId', 'servicoMaoDeObra', 'pecaPrecoUnitario'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Orcamento aguarda aprovacao e pertence a ordem', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('orcamentoId'));",
+                  "    pm.expect(String(body.ordemServicoId), 'ordemServicoId').to.eql(pm.environment.get('ordemId'));",
+                  "    pm.expect(body.status, 'status').to.eql('AguardandoAprovacao');",
+                  "});",
+                  "",
+                  "pm.test('Item de servico reflete a mao de obra vigente', function () {",
+                  "    pm.expect(body.itensServico, 'itensServico').to.be.an('array').that.has.lengthOf(1);",
+                  "    pm.expect(String(body.itensServico[0].servicoId), 'itensServico[0].servicoId').to.eql(pm.environment.get('servicoId'));",
+                  "    pm.expect(Number(body.itensServico[0].valorMaoDeObra), 'valorMaoDeObra').to.eql(Number(pm.environment.get('servicoMaoDeObra')));",
+                  "});",
+                  "",
+                  "pm.test('Item de material explode a receita da peca', function () {",
+                  "    pm.expect(body.itensMaterial, 'itensMaterial').to.be.an('array').that.has.lengthOf(1);",
+                  "    var material = body.itensMaterial[0];",
+                  "    pm.expect(material.tipo, 'tipo').to.eql('Peca');",
+                  "    pm.expect(String(material.materialId), 'materialId').to.eql(pm.environment.get('pecaId'));",
+                  "    pm.expect(material.quantidade, 'quantidade').to.eql(Number(pm.environment.get('pecaQuantidadeServico')));",
+                  "    pm.expect(Number(material.valorUnitario), 'valorUnitario').to.eql(Number(pm.environment.get('pecaPrecoUnitario')));",
+                  "});",
+                  "",
+                  "pm.test('Valor total = mao de obra + (preco unitario x quantidade)', function () {",
+                  "    var esperado = Number(pm.environment.get('servicoMaoDeObra')) +",
+                  "        (Number(pm.environment.get('pecaPrecoUnitario')) * Number(pm.environment.get('pecaQuantidadeServico')));",
+                  "    pm.expect(Number(body.valorTotal), 'valorTotal').to.eql(esperado);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/orcamentos/{{orcamentoId}}", "host": ["{{baseUrl}}"], "path": ["api", "orcamentos", "{{orcamentoId}}"] }
+          }
+        },
+        {
+          "name": "37 - Listar ordens de servico",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = [];",
+                  "pm.test('Corpo e uma lista JSON valida', function () {",
+                  "    body = pm.response.json();",
+                  "    pm.expect(body, 'lista de ordens').to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Lista contem a ordem deste run', function () {",
+                  "    var alvo = pm.environment.get('ordemId');",
+                  "    var encontrado = body.filter(function (o) { return String(o.id) === alvo; });",
+                  "    pm.expect(encontrado.length, 'ocorrencias de ' + alvo).to.eql(1);",
+                  "    pm.expect(String(encontrado[0].veiculoId), 'veiculoId').to.eql(pm.environment.get('veiculoId'));",
+                  "    pm.expect(encontrado[0].tipoManutencao, 'tipoManutencao').to.eql('Corretiva');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico"] }
+          }
+        },
+        {
+          "name": "38 - Aprovar orcamento",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'orcamentoId', 'idempotencyKey'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/orcamentos/{{orcamentoId}}/aprovar", "host": ["{{baseUrl}}"], "path": ["api", "orcamentos", "{{orcamentoId}}", "aprovar"] },
+            "description": "Dispara a saga: cria o pagamento com a chave de idempotencia ordem-servico:{id}:pagamento e a saga da ordem."
+          }
+        },
+        {
+          "name": "39 - Reaprovar orcamento (idempotencia)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'orcamentoId', 'ordemId', 'idempotencyKey'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204 na repeticao da operacao critica', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});",
+                  "",
+                  "pm.test('Chave de idempotencia reutilizada, sem nova ordem', function () {",
+                  "    pm.expect(pm.environment.get('idempotencyKey'), 'idempotencyKey')",
+                  "        .to.eql('ordem-servico:' + pm.environment.get('ordemId') + ':pagamento');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/orcamentos/{{orcamentoId}}/aprovar", "host": ["{{baseUrl}}"], "path": ["api", "orcamentos", "{{orcamentoId}}", "aprovar"] },
+            "description": "Repete a mesma operacao critica com a mesma chave. O dominio faz curto-circuito quando o orcamento ja esta Aprovado e as guardas impedem novo pagamento, nova saga e novo comando de reserva. A ausencia de duplicidade e confirmada pelo saldo de estoque no request 41."
+          }
+        },
+        {
+          "name": "40 - Polling da saga",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId', 'sagaMaxAttempts', 'sagaPollIntervalMs'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "var status = body.status;",
+                  "var maximo = Number(pm.environment.get('sagaMaxAttempts'));",
+                  "var tentativa = Number(pm.environment.get('sagaPollAttempt') || 0) + 1;",
+                  "pm.environment.set('sagaPollAttempt', String(tentativa));",
+                  "",
+                  "pm.test('Saga concluida: ordem em execucao apos pagamento e reserva', function () {",
+                  "    if (status === 'EmExecucao') { return; }",
+                  "    if (tentativa >= maximo) {",
+                  "        pm.expect.fail(",
+                  "            'Saga nao concluiu apos ' + tentativa + ' tentativas (intervalo de ' +",
+                  "            pm.environment.get('sagaPollIntervalMs') + 'ms). Status atual: \"' + status +",
+                  "            '\". Esperado \"EmExecucao\", que so e alcancado com pagamento mock aprovado e reserva de estoque confirmada. ' +",
+                  "            'Ordem: ' + pm.environment.get('ordemId') + ' | correlationId: ' + pm.environment.get('correlationId'));",
+                  "    }",
+                  "    pm.expect(status, 'status intermediario aceitavel enquanto a saga roda').to.eql('AguardandoAprovacao');",
+                  "});",
+                  "",
+                  "if (status !== 'EmExecucao' && tentativa < maximo) {",
+                  "    var espera = Number(pm.environment.get('sagaPollIntervalMs'));",
+                  "    var inicio = Date.now();",
+                  "    while (Date.now() - inicio < espera) { /* intervalo curto entre tentativas */ }",
+                  "    try { pm.execution.setNextRequest(pm.info.requestName); } catch (e) { postman.setNextRequest(pm.info.requestName); }",
+                  "} else {",
+                  "    pm.test('Numero de tentativas dentro do limite', function () {",
+                  "        pm.expect(tentativa, 'sagaPollAttempt').to.be.at.most(maximo);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}/status", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}", "status"] },
+            "description": "Polling limitado. Repete enquanto a ordem estiver AguardandoAprovacao, com intervalo curto (sagaPollIntervalMs) e teto de tentativas (sagaMaxAttempts). Nao existe endpoint HTTP de saga: EmExecucao e a prova transitiva de PagamentoAprovado -> ReservaPendente -> Reservada -> Concluida."
+          }
+        },
+        {
+          "name": "41 - Estoque apos a reserva",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'pecaId', 'initialStock', 'pecaQuantidadeServico'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "if (typeof body.quantidade === 'number') { pm.environment.set('finalStock', String(body.quantidade)); }",
+                  "",
+                  "pm.test('Estoque baixou exatamente uma vez: sem reserva duplicada', function () {",
+                  "    var inicial = Number(pm.environment.get('initialStock'));",
+                  "    var reservado = Number(pm.environment.get('pecaQuantidadeServico'));",
+                  "    pm.expect(String(body.pecaId), 'pecaId').to.eql(pm.environment.get('pecaId'));",
+                  "    pm.expect(body.quantidade, 'quantidade apos a reserva (a dupla aprovacao nao pode reservar duas vezes)')",
+                  "        .to.eql(inicial - reservado);",
+                  "});",
+                  "",
+                  "pm.test('finalStock salvo no environment', function () {",
+                  "    pm.expect(pm.environment.get('finalStock'), 'finalStock').to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/estoque/pecas/{{pecaId}}", "host": ["{{baseUrl}}"], "path": ["api", "estoque", "pecas", "{{pecaId}}"] }
+          }
+        },
+        {
+          "name": "42 - Detalhe da ordem em execucao",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId', 'orcamentoId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Ordem em execucao com diagnostico registrado', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('ordemId'));",
+                  "    pm.expect(body.status, 'status').to.eql('EmExecucao');",
+                  "    pm.expect(body.tipoManutencao, 'tipoManutencao').to.eql('Corretiva');",
+                  "    pm.expect(body.diagnostico, 'diagnostico').to.be.an('object');",
+                  "    pm.expect(body.diagnostico.descricao, 'diagnostico.descricao').to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Pagamento mock aprovado (prova transitiva pelo orcamento aprovado)', function () {",
+                  "    pm.expect(body.orcamento, 'orcamento').to.be.an('object');",
+                  "    pm.expect(String(body.orcamento.id), 'orcamento.id').to.eql(pm.environment.get('orcamentoId'));",
+                  "    pm.expect(body.orcamento.status, 'orcamento.status').to.eql('Aprovado');",
+                  "});",
+                  "",
+                  "pm.test('Execucao iniciada e nenhuma compensacao pendente', function () {",
+                  "    pm.expect(body.dataInicioExecucao, 'dataInicioExecucao').to.be.a('string').and.not.empty;",
+                  "    pm.expect(body.dataFimExecucao, 'dataFimExecucao').to.be.oneOf([null, undefined]);",
+                  "    // Compensacao devolveria a ordem para AguardandoAprovacao e limparia dataInicioExecucao.",
+                  "    pm.expect(body.status, 'status apos eventual compensacao').to.not.eql('AguardandoAprovacao');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}"] }
+          }
+        },
+        {
+          "name": "43 - Finalizar ordem",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}/finalizar", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}", "finalizar"] }
+          }
+        },
+        {
+          "name": "44 - Status apos finalizacao",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Ordem finalizada', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('ordemId'));",
+                  "    pm.expect(body.status, 'status').to.eql('Finalizada');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}/status", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}", "status"] }
+          }
+        },
+        {
+          "name": "45 - Entregar ordem",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}/entregar", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}", "entregar"] }
+          }
+        },
+        {
+          "name": "46 - Detalhe da ordem entregue",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Ciclo de vida encerrado no estado Entregue', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('ordemId'));",
+                  "    pm.expect(body.status, 'status').to.eql('Entregue');",
+                  "    pm.expect(body.dataInicioExecucao, 'dataInicioExecucao').to.be.a('string').and.not.empty;",
+                  "    pm.expect(body.dataFimExecucao, 'dataFimExecucao').to.be.a('string').and.not.empty;",
+                  "    pm.expect(body.orcamento.status, 'orcamento.status').to.eql('Aprovado');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ordens-servico/{{ordemId}}", "host": ["{{baseUrl}}"], "path": ["api", "ordens-servico", "{{ordemId}}"] }
+          }
+        },
+        {
+          "name": "47 - Relatorio de tempo medio de execucao",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['accessToken', 'ordemId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Relatorio considera a ordem concluida neste run', function () {",
+                  "    pm.expect(body.quantidadeOrdensFinalizadas, 'quantidadeOrdensFinalizadas').to.be.a('number').and.to.be.at.least(1);",
+                  "    pm.expect(body.tempoMedioHoras, 'tempoMedioHoras').to.be.a('number').and.to.be.at.least(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/relatorios/tempo-medio-execucao", "host": ["{{baseUrl}}"], "path": ["api", "relatorios", "tempo-medio-execucao"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Alteracao de funcionario (admin)",
+      "item": [
+        {
+          "name": "48 - Atualizar funcionario",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioId', 'funcionarioNomeAtualizado'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Funcionario atualizado retorna o novo estado', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('funcionarioId'));",
+                  "    pm.expect(body.nome, 'nome').to.eql(pm.environment.get('funcionarioNomeAtualizado'));",
+                  "    pm.expect(body.perfil, 'perfil').to.eql('Funcionario');",
+                  "    pm.expect(body.ativo, 'ativo').to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"{{funcionarioNomeAtualizado}}\",\n  \"perfil\": \"Funcionario\",\n  \"ativo\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios/{{funcionarioId}}", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios", "{{funcionarioId}}"] }
+          }
+        },
+        {
+          "name": "49 - Alterar senha do funcionario",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioId', 'funcionarioPasswordNova'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"novaSenha\": \"{{funcionarioPasswordNova}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios/{{funcionarioId}}/alterar-senha", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios", "{{funcionarioId}}", "alterar-senha"] }
+          }
+        },
+        {
+          "name": "50 - Login do funcionario com a nova senha",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['funcionarioCpf', 'funcionarioPasswordNova'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200 com a senha alterada', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Nova credencial autentica e o nome atualizado e refletido', function () {",
+                  "    pm.expect(body.accessToken, 'accessToken').to.be.a('string').and.not.empty;",
+                  "    pm.expect(body.user.role, 'user.role').to.eql('Funcionario');",
+                  "    pm.expect(body.user.name, 'user.name').to.eql(pm.environment.get('funcionarioNomeAtualizado'));",
+                  "});",
+                  "",
+                  "if (body.accessToken) { pm.environment.set('accessToken', body.accessToken); }",
+                  "",
+                  "pm.test('accessToken renovado no environment', function () {",
+                  "    pm.expect(pm.environment.get('accessToken'), 'accessToken').to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cpf\": \"{{funcionarioCpf}}\",\n  \"password\": \"{{funcionarioPasswordNova}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/cpf", "host": ["{{baseUrl}}"], "path": ["api", "auth", "cpf"] }
+          }
+        },
+        {
+          "name": "51 - Inativar funcionario",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios/{{funcionarioId}}/inativar", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios", "{{funcionarioId}}", "inativar"] }
+          }
+        },
+        {
+          "name": "52 - Obter funcionario inativo",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Funcionario consta como inativo', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('funcionarioId'));",
+                  "    pm.expect(body.ativo, 'ativo').to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios/{{funcionarioId}}", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios", "{{funcionarioId}}"] }
+          }
+        },
+        {
+          "name": "53 - Ativar funcionario",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 204', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(204);",
+                  "});",
+                  "",
+                  "pm.test('Resposta sem corpo', function () {",
+                  "    pm.expect(String(pm.response.text() || ''), 'corpo').to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios/{{funcionarioId}}/ativar", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios", "{{funcionarioId}}", "ativar"] }
+          }
+        },
+        {
+          "name": "54 - Obter funcionario reativado",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "['adminAccessToken', 'funcionarioId'].forEach(function (chave) {",
+                  "    if (!pm.environment.get(chave)) {",
+                  "        try { pm.execution.setNextRequest(null); } catch (e) { postman.setNextRequest(null); }",
+                  "        throw new Error('Variavel obrigatoria ausente: ' + chave);",
+                  "    }",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function detalhe() {",
+                  "    try { var b = pm.response.json(); return b.title || b.error || b.message || JSON.stringify(b).slice(0, 300); }",
+                  "    catch (e) { return String(pm.response.text()).slice(0, 300); }",
+                  "}",
+                  "",
+                  "pm.test('HTTP 200', function () {",
+                  "    pm.expect(pm.response.code, 'HTTP ' + pm.response.code + ' - ' + detalhe()).to.eql(200);",
+                  "});",
+                  "",
+                  "var body = {};",
+                  "pm.test('Corpo e JSON valido', function () { body = pm.response.json(); });",
+                  "",
+                  "pm.test('Funcionario reativado com o nome atualizado', function () {",
+                  "    pm.expect(String(body.id), 'id').to.eql(pm.environment.get('funcionarioId'));",
+                  "    pm.expect(body.ativo, 'ativo').to.eql(true);",
+                  "    pm.expect(body.nome, 'nome').to.eql(pm.environment.get('funcionarioNomeAtualizado'));",
+                  "});",
+                  "",
+                  "pm.test('Todas as variaveis encadeadas do run foram capturadas', function () {",
+                  "    ['funcionarioId', 'clienteId', 'veiculoId', 'pecaId', 'servicoId', 'ordemId', 'orcamentoId', 'initialStock', 'finalStock', 'idempotencyKey']",
+                  "        .forEach(function (chave) {",
+                  "            pm.expect(pm.environment.get(chave), chave).to.be.a('string').and.not.empty;",
+                  "        });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminAccessToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/admin/funcionarios/{{funcionarioId}}", "host": ["{{baseUrl}}"], "path": ["api", "admin", "funcionarios", "{{funcionarioId}}"] }
+          }
+        }
+      ]
+    }
+  ]
+}
