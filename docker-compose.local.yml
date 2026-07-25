@@ -30,7 +30,6 @@ services:
       CADASTRO_DB_PASSWORD: ${CADASTRO_DB_PASSWORD}
       ESTOQUE_DB_PASSWORD: ${ESTOQUE_DB_PASSWORD}
       ORDENS_DB_PASSWORD: ${ORDENS_DB_PASSWORD}
-      E2E_DB_PASSWORD: ${E2E_DB_PASSWORD}
     volumes:
       - ./docker/sql-init:/scripts:ro
     command: ["/bin/bash", "/scripts/init-sql.sh"]
@@ -92,7 +91,7 @@ services:
   cadastro-api:
     build:
       context: ../oficina-cadastro-fiap-fase4
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
       Authentication__Mode: ${AUTHENTICATION_MODE}
@@ -115,7 +114,7 @@ services:
   estoque-api:
     build:
       context: ../oficina-estoque-fiap-fase4
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
       Authentication__Mode: ${AUTHENTICATION_MODE}
@@ -148,7 +147,7 @@ services:
   ordens-api:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
       Authentication__Mode: ${AUTHENTICATION_MODE}
@@ -186,38 +185,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 18
-    networks:
-      - oficina-local
-
-  e2e-tests:
-    profiles: ["tests"]
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.e2e
-    environment:
-      RUN_E2E: "true"
-      CADASTRO_BASE_URL: http://cadastro-api:8080
-      ESTOQUE_BASE_URL: http://estoque-api:8080
-      ORDENS_BASE_URL: http://ordens-api:8080
-      PAYMENT_MOCK_BASE_URL: http://payment-mock:8080
-      AWS_REGION: ${AWS_REGION}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      SQS_SERVICE_URL: http://localstack:4566
-      SQL_CADASTRO: Server=sqlserver,1433;Database=OficinaCadastroDb;User Id=oficina_e2e_harness;Password=${E2E_DB_PASSWORD};TrustServerCertificate=True
-      SQL_ESTOQUE: Server=sqlserver,1433;Database=OficinaEstoqueDb;User Id=oficina_e2e_harness;Password=${E2E_DB_PASSWORD};TrustServerCertificate=True
-      SQL_ORDENS: Server=sqlserver,1433;Database=OficinaOrdensServicoDb;User Id=oficina_e2e_harness;Password=${E2E_DB_PASSWORD};TrustServerCertificate=True
-    depends_on:
-      cadastro-api:
-        condition: service_healthy
-      estoque-api:
-        condition: service_healthy
-      ordens-api:
-        condition: service_healthy
-      payment-mock:
-        condition: service_healthy
-      localstack-init:
-        condition: service_completed_successfully
     networks:
       - oficina-local
 

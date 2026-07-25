@@ -1,6 +1,6 @@
 # oficina-ordens-servico
 
-Microsserviço de **ordens de serviço, orçamento e saga de pagamento** da solução **Oficina**. É também o **hub de execução local** e o repositório da **validação de ponta a ponta**.
+Microsserviço de **ordens de serviço, orçamento e saga de pagamento** da solução **Oficina**. É também o **hub de execução local** e o repositório da **collection Postman** que valida a solução publicada.
 
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
 ![ASP.NET Core](https://img.shields.io/badge/ASP.NET%20Core-API-512BD4?logo=dotnet&logoColor=white)
@@ -36,11 +36,11 @@ A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AW
 | Repositório | Responsabilidade | Etapas |
 |---|---|:---:|
 | [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4) | Rede, banco de dados, segredos e estado do Terraform | 1 e 3 |
-| [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4) | Plataforma ECS/ALB e entrada de API | 2, 6 e 7 |
+| [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4) | Plataforma ECS/ALB e entrada de API | 2 e 8 |
 | [oficina-auth-lambda](https://github.com/fabianorodrigues/oficina-auth-lambda-fiap-fase4) | Autenticação por CPF e validação de token | 4 |
 | [oficina-cadastro](https://github.com/fabianorodrigues/oficina-cadastro-fiap-fase4) | Clientes, veículos, funcionários e catálogo de serviços | 5 |
-| [oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4) | Peças, insumos, saldos e reservas | 5 |
-| **oficina-ordens-servico** *(este)* | Ordens de serviço, orçamento e saga de pagamento | 5 e 8 |
+| [oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4) | Peças, insumos, saldos e reservas | 6 |
+| **oficina-ordens-servico** *(este)* | Ordens de serviço, orçamento e saga de pagamento | 7 e 9 |
 
 **Papel deste repositório:** orquestra o ciclo de vida da ordem de serviço e é o único serviço que coordena os demais — abertura, diagnóstico, orçamento, **saga distribuída** de pagamento e reserva de material, e relatórios.
 
@@ -54,13 +54,16 @@ A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AW
 | 2 | oficina-infra | Platform Deploy | `APPLY` |
 | 3 | oficina-infra-db | Database Bootstrap | `BOOTSTRAP` |
 | 4 | oficina-auth-lambda | Auth Deploy | `DEPLOY` |
-| **5** | cadastro · estoque · **oficina-ordens-servico** | **Deploy** | `DEPLOY` |
-| 6 | oficina-infra | Entrypoint Deploy | `APPLY` |
-| 7 | oficina-infra | Observability Validate | — |
-| **8** | — | **Collection Postman** (execução manual) | — |
+| 5 | oficina-cadastro | Cadastro Deploy | `DEPLOY` |
+| 6 | oficina-estoque | Estoque Deploy | `DEPLOY` |
+| **7** | **oficina-ordens-servico** | **Ordens Deploy** | `DEPLOY` |
+| 8 | oficina-infra | Entrypoint Deploy | `APPLY` |
+| **9** | **oficina-ordens-servico** | **Collection Postman** (execução manual) | — |
+
+Após a etapa 8, o **Observability Validate** (oficina-infra) está disponível como validação **opcional**.
 
 > [!IMPORTANT]
-> Este repositório aparece na **etapa 5**, junto aos outros dois serviços, e **encerra a sequência na etapa 8** com a validação funcional de ponta a ponta, agora executada manualmente pelo Collection Runner do Postman a partir de [postman/](postman/). É também o **hub de execução local**: seu arquivo de composição sobe os três serviços, o banco e as filas emuladas.
+> Este repositório aparece duas vezes: na **etapa 7**, como o terceiro dos três serviços, e na **etapa 9**, que **encerra a sequência** com a validação funcional executada pelo Collection Runner do Postman a partir de [postman/](postman/). É também o **hub de execução local**: seu arquivo de composição sobe os três serviços, o banco e as filas emuladas.
 
 ---
 
@@ -205,7 +208,7 @@ Configure em **Settings → Secrets and variables → Actions** do repositório.
 
 ### Papéis IAM das tasks ECS — não provisionados automaticamente
 
-O deploy registra *task definitions* Fargate e reutiliza duas roles IAM que **precisam existir antes da etapa 5**. Nenhum workflow da solução as cria.
+O deploy registra *task definitions* Fargate e reutiliza duas roles IAM que **precisam existir antes da etapa 7**. Nenhum workflow da solução as cria.
 
 | Variable | Trust | Permissões mínimas |
 |---|---|---|
@@ -232,17 +235,22 @@ Definidas pelo deploy na *task definition*; nenhuma precisa ser configurada no G
 
 ## Como executar
 
-### Etapa 5 — Ordens Deploy
+### Etapa 7 — Ordens Deploy
 
 **Actions → Ordens Deploy → Run workflow → `confirmation` = `DEPLOY`**
 
 Roda apenas na branch `main`. Sequência: valida a requisição, as variáveis e a integração de pagamentos → descobre cluster, registro de imagem, filas e DNS do ALB → confere que as filas são FIFO → compila e testa → constrói as imagens → varredura de vulnerabilidades → envia ao ECR → **executa a task de migração (ECS Run Task) e aguarda** → registra a *task definition* de runtime → **cria ou atualiza o serviço ECS** e aguarda ficar estável → confirma destino saudável no ALB.
 
-### Etapa 8 — Collection Postman (execução manual)
+### Etapa 9 — Collection Postman (execução manual)
 
 **Postman → importar [postman/oficina-main-flow.postman_collection.json](postman/oficina-main-flow.postman_collection.json) e [postman/oficina-main-flow.postman_environment.json](postman/oficina-main-flow.postman_environment.json) → Collection Runner**
 
-Executa o fluxo funcional contra o ambiente publicado, na ordem da collection: autentica o admin inicial, cria um funcionário, cadastra cliente e veículo, cadastra peça, ajusta estoque e cadastra serviço (com criação, alteração e consulta de cada um), abre uma ordem, classifica como corretiva, registra o diagnóstico, aprova o orçamento, repete a aprovação para provar a idempotência, acompanha a saga até a reserva de material, conclui e entrega a ordem, e fecha com o relatório e a manutenção do funcionário. É a validação final da solução. Execute **apenas após a etapa 6**; antes disso as rotas ainda não existem.
+Executa o fluxo funcional contra o ambiente publicado, na ordem da collection: autentica o admin inicial, cria um funcionário, cadastra cliente e veículo, cadastra peça, ajusta estoque e cadastra serviço (com criação, alteração e consulta de cada um), abre uma ordem, classifica como corretiva, registra o diagnóstico, aprova o orçamento, repete a aprovação para provar a idempotência, acompanha a saga até a reserva de material, conclui e entrega a ordem, e fecha com o relatório e a manutenção do funcionário. É a validação final da solução.
+
+Duas pré-condições obrigatórias:
+
+1. **Etapa 8 concluída** — antes do Entrypoint Deploy as rotas não existem na API Gateway.
+2. **Administrador inicial provisionado** — reexecute o **Database Bootstrap** com `provision_admin_user` = `true` em [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4#usuário-administrador-inicial--segunda-execução-do-bootstrap). Esse job exige que as migrations do Cadastro (etapa 5) já estejam aplicadas, por isso não pode rodar na etapa 3.
 
 Antes de rodar, preencha três variáveis do environment (nenhuma é versionada):
 
@@ -251,8 +259,6 @@ Antes de rodar, preencha três variáveis do environment (nenhuma é versionada)
 | `baseUrl` | `aws ssm get-parameter --name /oficina/infra/api/url --query Parameter.Value --output text` |
 | `loginCpf` | Secret `ADMIN_INICIAL_CPF` |
 | `loginPassword` | Secret `ADMIN_INICIAL_PASSWORD` |
-
-O admin inicial é provisionado pelo job `provision-admin` do workflow **Database Bootstrap** (repositório `oficina-infra-db`), com o input `provision_admin_user` = `true`. O job só grava esse usuário e exige que as migrations do Cadastro já tenham sido aplicadas.
 
 ---
 
@@ -279,7 +285,7 @@ CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name \
 aws ecs describe-services --cluster "$CLUSTER" --services oficina-ordens-servico \
   --region "$REGIAO" --query 'services[0].{Status:status,Rodando:runningCount}' --output table
 
-# Após a etapa 6, verificação de saúde pela API pública
+# Após a etapa 8, verificação de saúde pela API pública
 API=$(aws ssm get-parameter --name /oficina/infra/api/url \
   --region "$REGIAO" --query 'Parameter.Value' --output text)
 curl -s -o /dev/null -w '%{http_code}\n' "$API/health/ordens"
@@ -332,7 +338,7 @@ dotnet build -c Release
 dotnet test
 ```
 
-A suíte de ponta a ponta é ignorada por padrão e só executa dentro do ambiente composto, por um perfil dedicado — portanto **não roda na integração contínua**.
+Os testes cobrem casos de uso, contratos públicos, metadados de persistência e a integração de pagamento com o provedor simulado. A suíte inteira roda na integração contínua.
 
 ---
 
@@ -340,13 +346,19 @@ A suíte de ponta a ponta é ignorada por padrão e só executa dentro do ambien
 
 - **Pagamento simulado.** Não há integração com provedor externo; o caminho externo é bloqueado por validação de inicialização.
 - **Réplica única, sem escala automática**, por decisão de projeto.
-- **Testes de ponta a ponta fora da CI**, por dependerem do ambiente composto.
+- **Validação funcional manual.** A verificação de ponta a ponta do ambiente publicado é a collection Postman da etapa 9, executada à mão; não há workflow que a rode.
 - **Compensação sem reprocessamento automático.** Uma saga que chega ao estado de falha de compensação exige intervenção manual.
 
 ---
 
 ## Próxima etapa
 
-Este é o último repositório da sequência. Com a **etapa 8** concluída, a solução está publicada e validada de ponta a ponta.
+**Depois da etapa 7 (Ordens Deploy) → etapa 8, obrigatória.**
+Pré-condição: serviço `oficina-ordens-servico` estável no ECS e destino saudável no *target group*, com os três serviços no ar.
+**→ [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4)** — seção [Como executar → Etapa 8](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4#etapa-8--entrypoint-deploy), que publica a API Gateway e o VPC Link.
 
-Para revisar a plataforma ou reexecutar as validações, volte a **[oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4)**.
+**Depois da etapa 8 → etapa 9, obrigatória, aqui mesmo.**
+Pré-condição: API Gateway aplicada e administrador inicial provisionado.
+**→ [Como executar → Etapa 9](#etapa-9--collection-postman-execução-manual)**, neste README. Encerra a sequência: com ela aprovada, a solução está publicada e validada.
+
+Para revisar a etapa anterior, volte a **[oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4)** (etapa 6).

@@ -21,7 +21,6 @@ escape_sql_literal() {
 sed -e "s|__CADASTRO_PASSWORD__|$(escape_sql_literal "$CADASTRO_DB_PASSWORD")|g" \
     -e "s|__ESTOQUE_PASSWORD__|$(escape_sql_literal "$ESTOQUE_DB_PASSWORD")|g" \
     -e "s|__ORDENS_PASSWORD__|$(escape_sql_literal "$ORDENS_DB_PASSWORD")|g" \
-    -e "s|__E2E_PASSWORD__|$(escape_sql_literal "$E2E_DB_PASSWORD")|g" \
     /scripts/init.sql > /tmp/init.sql
 
 "$SQLCMD" -S sqlserver,1433 -U sa -P "$MSSQL_SA_PASSWORD" -C -i /tmp/init.sql
