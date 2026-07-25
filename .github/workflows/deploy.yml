@@ -4,9 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type DEPLOY to continue
+        description: 'Type DEPLOY to publish Ordens'
         required: true
         type: string
+      transport:
+        description: 'Manifest transport: s3 (default) or ssm (fallback)'
+        required: false
+        default: s3
+        type: choice
+        options:
+          - s3
+          - ssm
 
 permissions:
   contents: read
@@ -15,43 +23,177 @@ concurrency:
   group: ordens-deploy
   cancel-in-progress: false
 
+env:
+  SOLUTION: Oficina.OrdensServico.sln
+  MIN_COVERAGE: "80"
+  SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+  SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
 jobs:
-  deploy:
-    name: Deploy Ordens
+  bdd:
+    name: Distributed BDD
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      AWS_REGION: ${{ vars.AWS_REGION }}
-      ECS_TASK_EXECUTION_ROLE_ARN: ${{ vars.ECS_TASK_EXECUTION_ROLE_ARN }}
-      ECS_TASK_ROLE_ARN: ${{ vars.ECS_TASK_ROLE_ARN }}
+      ESTOQUE_REPOSITORY: ${{ vars.ESTOQUE_REPOSITORY }}
+      ESTOQUE_REF: ${{ vars.ESTOQUE_REF }}
+      CADASTRO_REPOSITORY: ${{ vars.CADASTRO_REPOSITORY }}
+      CADASTRO_REF: ${{ vars.CADASTRO_REF }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
       - name: Validate request
         run: |
           test "${GITHUB_REF}" = "refs/heads/main"
-          test "${{ inputs.confirmation }}" = "DEPLOY"
+          test "${{ github.event.inputs.confirmation }}" = "DEPLOY"
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - name: Run distributed BDD
+        shell: pwsh
+        run: ./scripts/run-bdd.ps1
+        env:
+          CROSS_REPOSITORY_TOKEN: ${{ secrets.CROSS_REPOSITORY_TOKEN }}
+      - name: Publish BDD artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bdd-${{ github.run_id }}
+          path: artifacts/bdd
+          retention-days: 7
+  deploy:
+    name: Deploy Ordens to K3s
+    needs: bdd
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET_FALLBACK: ${{ vars.TF_STATE_BUCKET }}
+      MANIFEST_TRANSPORT: ${{ inputs.transport }}
+    steps:
+      - name: Validate request
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "${{ github.event.inputs.confirmation }}" = "DEPLOY"
+          test -n "${AWS_REGION}"
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: "10.0.x"
+          global-json-file: global.json
 
       - name: Validate configuration
         shell: pwsh
-        run: |
-          ./scripts/validate-official-config.ps1
-          ./scripts/validate-payment-integration.ps1
+        run: ./scripts/validate-official-config.ps1
 
-      - name: Validate deployment variables
+      # A analise do SonarCloud e opcional. Sem SONAR_TOKEN ela e ignorada e o
+      # gate local de cobertura continua valendo sozinho. Com o token presente,
+      # a configuracao precisa estar completa: token sem projeto e engano de
+      # configuracao, nao motivo para pular em silencio.
+      - name: Resolve quality analysis mode
+        id: sonar
         shell: pwsh
         run: |
-          foreach ($name in @('AWS_REGION', 'ECS_TASK_EXECUTION_ROLE_ARN', 'ECS_TASK_ROLE_ARN')) {
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:SONAR_TOKEN)) {
+            'enabled=false' | Add-Content -Path $env:GITHUB_OUTPUT
+            'SonarCloud nao configurado: analise de qualidade ignorada. O gate local de cobertura permanece obrigatorio.' |
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            return
+          }
+          foreach ($name in @('SONAR_PROJECT_KEY', 'SONAR_ORGANIZATION')) {
             if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "Repository Variable $name is required."
+              throw "SONAR_TOKEN esta configurado, mas a Repository Variable $name esta ausente."
             }
           }
+          'enabled=true' | Add-Content -Path $env:GITHUB_OUTPUT
+
+      - name: Setup Java for SonarCloud
+        if: steps.sonar.outputs.enabled == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install SonarScanner
+        if: steps.sonar.outputs.enabled == 'true'
+        run: dotnet tool install --global dotnet-sonarscanner
+
+      - name: SonarCloud begin
+        if: steps.sonar.outputs.enabled == 'true'
+        run: |
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet sonarscanner begin \
+            /k:"$SONAR_PROJECT_KEY" \
+            /o:"$SONAR_ORGANIZATION" \
+            /d:sonar.token="$SONAR_TOKEN" \
+            /d:sonar.host.url="https://sonarcloud.io" \
+            /d:sonar.cs.opencover.reportsPaths="TestResults/**/coverage.opencover.xml" \
+            /d:sonar.cs.vstest.reportsPaths="TestResults/**/*.trx" \
+            /d:sonar.qualitygate.wait=true
+
+      - name: Restore
+        run: dotnet restore "$SOLUTION"
+
+      - name: Build
+        run: dotnet build "$SOLUTION" --configuration Release --no-restore
+
+      - name: Test with coverage
+        run: |
+          dotnet test "$SOLUTION" --configuration Release --no-build \
+            --settings .runsettings \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./TestResults \
+            --logger "trx;LogFileName=test-results.trx"
+
+      - name: Build coverage report
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-reportgenerator-globaltool >/dev/null
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          reportgenerator \
+            "-reports:TestResults/**/coverage.cobertura.xml" \
+            "-targetdir:coverage-report" \
+            "-reporttypes:Html;Cobertura;TextSummary"
+
+      - name: Enforce coverage gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # O gate local e independente do SonarCloud: cobertura abaixo do
+          # minimo reprova mesmo com o SonarCloud indisponivel.
+          $reportPath = 'coverage-report/Cobertura.xml'
+          if (-not (Test-Path -LiteralPath $reportPath)) { throw 'Relatorio de cobertura nao gerado.' }
+          [xml]$report = Get-Content -LiteralPath $reportPath -Raw
+          $linePercentage = [Math]::Round([double]$report.coverage.'line-rate' * 100, 2)
+          $minimum = [double]$env:MIN_COVERAGE
+          "Line coverage: $linePercentage%" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($linePercentage -lt $minimum) {
+            throw "Cobertura de linhas $linePercentage% abaixo do minimo exigido de $minimum%."
+          }
+
+      - name: Publish coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ github.run_id }}
+          path: |
+            coverage-report
+            TestResults/**/*.trx
+          retention-days: 7
+
+      - name: SonarCloud end and quality gate
+        if: steps.sonar.outputs.enabled == 'true'
+        run: |
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
@@ -61,98 +203,84 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Read AWS metadata
-        id: meta
+      - name: Resolve platform metadata
+        id: platform
+        shell: bash
         run: |
           set -euo pipefail
-          aws sts get-caller-identity >/dev/null
-          CLUSTER=$(aws ssm get-parameter --name /oficina/infra/cluster/name --region "$AWS_REGION" --query Parameter.Value --output text)
-          ECR=$(aws ssm get-parameter --name /oficina/infra/ecr/ordens --region "$AWS_REGION" --query Parameter.Value --output text)
-          COMMANDS=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos/url --region "$AWS_REGION" --query Parameter.Value --output text)
-          COMMANDS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/estoque-comandos-dlq/url --region "$AWS_REGION" --query Parameter.Value --output text)
-          EVENTS=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos/url --region "$AWS_REGION" --query Parameter.Value --output text)
-          EVENTS_DLQ=$(aws ssm get-parameter --name /oficina/infra/sqs/ordens-eventos-dlq/url --region "$AWS_REGION" --query Parameter.Value --output text)
-          aws ssm get-parameter --name /oficina/infra/alb/dns-name --region "$AWS_REGION" >/dev/null
-          aws ssm get-parameter --name /oficina/infra/ecs/ordens/target-group-arn --region "$AWS_REGION" >/dev/null
-          aws ssm get-parameter --name /oficina/infra/ecs/ordens/log-group-name --region "$AWS_REGION" >/dev/null
-          aws ssm get-parameter --name /oficina/infra/ecs/task-security-group-id --region "$AWS_REGION" >/dev/null
+          identity_account="$(aws sts get-caller-identity --query Account --output text)"
+          deterministic_bucket="oficina-terraform-state-${identity_account}-${AWS_REGION}"
+          bucket="$deterministic_bucket"
+          if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+            bucket="${TF_STATE_BUCKET_FALLBACK:-}"
+          fi
+
+          ecr="$(aws ssm get-parameter --name /oficina/infra/ecr/ordens --region "$AWS_REGION" --query 'Parameter.Value' --output text)"
+          aws ssm get-parameter --name /oficina/infra/k8s/instance-id --region "$AWS_REGION" >/dev/null
+          aws ssm get-parameter --name /oficina/infra/services/ordens/target-group-arn --region "$AWS_REGION" >/dev/null
           aws secretsmanager describe-secret --secret-id /oficina/ordens/runtime-db >/dev/null
           aws secretsmanager describe-secret --secret-id /oficina/ordens/migration-db >/dev/null
-          aws secretsmanager list-secret-version-ids --secret-id /oficina/ordens/runtime-db --include-deprecated --query "Versions[?contains(VersionStages, \`AWSCURRENT\`)] | length(@)" --output text | grep -q '^1$'
-          aws secretsmanager list-secret-version-ids --secret-id /oficina/ordens/migration-db --include-deprecated --query "Versions[?contains(VersionStages, \`AWSCURRENT\`)] | length(@)" --output text | grep -q '^1$'
-          aws sqs get-queue-attributes --queue-url "$COMMANDS" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue RedrivePolicy VisibilityTimeout --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
-          aws sqs get-queue-attributes --queue-url "$COMMANDS_DLQ" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
-          aws sqs get-queue-attributes --queue-url "$EVENTS" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue RedrivePolicy VisibilityTimeout --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
-          aws sqs get-queue-attributes --queue-url "$EVENTS_DLQ" --region "${{ vars.AWS_REGION }}" --attribute-names FifoQueue --query 'Attributes.FifoQueue' --output text | grep -q '^true$'
-          IMAGE_TAG="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          # Tag imutavel derivada do commit. latest esta proibido.
+          image_tag="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           {
-            echo "cluster=$CLUSTER"
-            echo "ecr=$ECR"
-            echo "image_tag=$IMAGE_TAG"
-            echo "runtime_image=$ECR:${IMAGE_TAG}"
-            echo "migration_image=$ECR:${IMAGE_TAG}-migration"
-            echo "commands=$COMMANDS"
-            echo "commands_dlq=$COMMANDS_DLQ"
-            echo "events=$EVENTS"
-            echo "events_dlq=$EVENTS_DLQ"
-          } >> "$GITHUB_OUTPUT"
+            echo "bucket=${bucket}"
+            echo "ecr=${ecr}"
+            echo "image_tag=${image_tag}"
+            echo "runtime_image=${ecr}:${image_tag}"
+            echo "migration_image=${ecr}:${image_tag}-migration"
+          } >> "${GITHUB_OUTPUT}"
 
-      - name: Build solution
-        run: |
-          dotnet restore Oficina.OrdensServico.sln
-          dotnet build Oficina.OrdensServico.sln -c Release --no-restore
-          dotnet test Oficina.OrdensServico.sln -c Release --no-build
-
-      - name: Login ECR
+      - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build images
         run: |
-          docker build -f Dockerfile -t "${{ steps.meta.outputs.runtime_image }}" .
-          docker build -f Dockerfile.migration -t "${{ steps.meta.outputs.migration_image }}" .
+          docker build -f Dockerfile -t "${{ steps.platform.outputs.runtime_image }}" .
+          docker build -f Dockerfile.migration -t "${{ steps.platform.outputs.migration_image }}" .
 
-      - name: Scan images
+      - name: Scan runtime image
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          image-ref: ${{ steps.meta.outputs.runtime_image }}
+          image-ref: ${{ steps.platform.outputs.runtime_image }}
           severity: HIGH,CRITICAL
-          exit-code: "1"
+          exit-code: '1'
 
       - name: Scan migration image
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          image-ref: ${{ steps.meta.outputs.migration_image }}
+          image-ref: ${{ steps.platform.outputs.migration_image }}
           severity: HIGH,CRITICAL
-          exit-code: "1"
+          exit-code: '1'
 
       - name: Push images
         run: |
-          docker push "${{ steps.meta.outputs.runtime_image }}"
-          docker push "${{ steps.meta.outputs.migration_image }}"
+          docker push "${{ steps.platform.outputs.runtime_image }}"
+          docker push "${{ steps.platform.outputs.migration_image }}"
 
-      - name: Deploy to ECS
+      - name: Deploy to K3s
         shell: pwsh
         run: |
-          ./scripts/deploy-ecs-fargate.ps1 `
-            -RuntimeImage "${{ steps.meta.outputs.runtime_image }}" `
-            -MigrationImage "${{ steps.meta.outputs.migration_image }}" `
+          ./scripts/deploy-k3s.ps1 `
+            -RuntimeImage "${{ steps.platform.outputs.runtime_image }}" `
+            -MigrationImage "${{ steps.platform.outputs.migration_image }}" `
             -AwsRegion "$env:AWS_REGION" `
-            -TaskExecutionRoleArn "$env:ECS_TASK_EXECUTION_ROLE_ARN" `
-            -TaskRoleArn "$env:ECS_TASK_ROLE_ARN"
+            -CommitSha "$env:GITHUB_SHA" `
+            -RunId "$env:GITHUB_RUN_ID" `
+            -StateBucket "${{ steps.platform.outputs.bucket }}" `
+            -Transport "$env:MANIFEST_TRANSPORT"
 
       - name: Publish summary
         run: |
           {
-            echo "Commit SHA: ${GITHUB_SHA}"
-            echo "Runtime image tag: ${{ steps.meta.outputs.image_tag }}"
-            echo "Migration image tag: ${{ steps.meta.outputs.image_tag }}-migration"
-            echo "Cluster: ${{ steps.meta.outputs.cluster }}"
-            echo "Service: oficina-ordens-servico"
-            echo "Payment provider: Mock"
-            echo "Mock behavior: Approved"
-            echo "External API: Disabled"
-            echo "External webhook: Disabled"
-            echo "Contract: Pending"
-            echo "Deployment status: ECS stable"
-            echo "Target health: healthy"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "## Ordens Deploy"
+            echo
+            echo "- Commit SHA: ${GITHUB_SHA}"
+            echo "- ECR repository: ${{ steps.platform.outputs.ecr }}"
+            echo "- Runtime image tag: ${{ steps.platform.outputs.image_tag }}"
+            echo "- Migration image tag: ${{ steps.platform.outputs.image_tag }}-migration"
+            echo "- Service: oficina-ordens-servico"
+            echo "- NodePort: 30082"
+            echo "- Manifest transport: ${MANIFEST_TRANSPORT}"
+            echo "- Target group: healthy"
+          } >> "${GITHUB_STEP_SUMMARY}"

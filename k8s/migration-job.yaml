@@ -1,0 +1,55 @@
+# Migration Job do oficina-ordens-servico.
+# O nome carrega o commit SHA porque spec.template e campo imutavel de Job:
+# aplicar sobre um nome fixo com imagem nova falha. Os Jobs anteriores sao
+# removidos por label depois que o Deployment sobe.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oficina-ordens-servico-migration-__SHORT_SHA__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: oficina-ordens-servico
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: oficina
+    oficina.io/commit: "__SHORT_SHA__"
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oficina-ordens-servico
+        app.kubernetes.io/component: migration
+        oficina.io/commit: "__SHORT_SHA__"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: oficina-ordens-servico-migration
+          image: __MIGRATION_IMAGE__
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: oficina-ordens-servico-migration-config
+            # Somente a credencial de migration. O usuario de aplicacao nao
+            # altera schema, e esta credencial nao chega ao Deployment.
+            - secretRef:
+                name: oficina-ordens-servico-database-migration
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
