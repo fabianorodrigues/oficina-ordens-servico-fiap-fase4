@@ -27,6 +27,7 @@ param(
     [Parameter(Mandatory = $true)][string]$AwsRegion,
     [Parameter(Mandatory = $true)][string]$CommitSha,
     [Parameter(Mandatory = $true)][string]$RunId,
+    [string]$RunAttempt = '1',
     [string]$StateBucket = '',
     [ValidateSet('s3', 'ssm')][string]$Transport = 's3',
     [string]$ConfigPath = 'config/official.json'
@@ -168,6 +169,13 @@ $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 
 $serviceName = [string]$config.kubernetes.deploymentName
 $shortSha = $CommitSha.Substring(0, [Math]::Min(12, $CommitSha.Length)).ToLowerInvariant()
+$deployRunId = "$RunId-$RunAttempt".ToLowerInvariant()
+if ($deployRunId -notmatch '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') {
+    throw "RunId/RunAttempt geraram um identificador Kubernetes invalido: $deployRunId"
+}
+$runHashInput = [System.Text.Encoding]::UTF8.GetBytes($deployRunId)
+$runHash = ([BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($runHashInput))).Replace('-', '').Substring(0, 12).ToLowerInvariant()
+$migrationJobId = "$($shortSha.Substring(0, [Math]::Min(8, $shortSha.Length)))-$runHash"
 
 foreach ($image in @($RuntimeImage, $MigrationImage)) {
     if ($image -match ':latest$' -or $image -notmatch ':') {
@@ -177,6 +185,7 @@ foreach ($image in @($RuntimeImage, $MigrationImage)) {
 
 Write-Host "Servico: $serviceName"
 Write-Host "Commit: $shortSha"
+Write-Host "Run: $deployRunId"
 
 Invoke-Aws -Arguments @('sts', 'get-caller-identity', '--output', 'text') | Out-Null
 $identity = (Invoke-Aws -Arguments @('sts', 'get-caller-identity', '--output', 'json')).Output | ConvertFrom-Json
@@ -205,6 +214,8 @@ $tokens = @{
     '__IMAGE__'          = $RuntimeImage
     '__MIGRATION_IMAGE__' = $MigrationImage
     '__SHORT_SHA__'      = $shortSha
+    '__DEPLOY_RUN_ID__'  = $deployRunId
+    '__MIGRATION_JOB_ID__' = $migrationJobId
     '__NODE_PORT__'      = $nodePort
 }
 
@@ -218,7 +229,7 @@ if ($null -ne $config.PSObject.Properties['services']) {
     $tokens['__ALB_DNS__'] = Get-SsmValue $config.services.cadastroBaseUrlParameter
 }
 
-$workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "oficina-deploy-$RunId"
+$workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "oficina-deploy-$deployRunId"
 if (Test-Path -LiteralPath $workRoot) { Remove-Item -LiteralPath $workRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 $packageDir = Join-Path $workRoot 'package'
@@ -283,14 +294,14 @@ $packageSha = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.To
 $packageBytes = (Get-Item -LiteralPath $packagePath).Length
 Write-Host "Pacote: $packageBytes bytes, SHA-256 $packageSha"
 
-$stageDir = "/opt/oficina/stage/$serviceName-$RunId"
+$stageDir = "/opt/oficina/stage/$serviceName-$deployRunId"
 
 # ---------------------------------------------------------------------------
 # Preflight do transporte
 # ---------------------------------------------------------------------------
 
-$parameterName = "$($config.deploy.parameterPathPrefix)$RunId/manifest-url"
-$objectKey = "$($config.deploy.s3Prefix)$RunId/manifests.tar.gz"
+$parameterName = "$($config.deploy.parameterPathPrefix)$deployRunId/manifest-url"
+$objectKey = "$($config.deploy.s3Prefix)$deployRunId/manifests.tar.gz"
 $useS3 = ($Transport -eq 's3')
 
 if ($useS3) {
@@ -494,6 +505,8 @@ STAGE_DIR='@@STAGE_DIR@@'
 NS='@@NAMESPACE@@'
 SVC='@@SERVICE@@'
 SHORT_SHA='@@SHORT_SHA@@'
+DEPLOY_RUN_ID='@@DEPLOY_RUN_ID@@'
+MIGRATION_JOB_ID='@@MIGRATION_JOB_ID@@'
 REGION='@@REGION@@'
 RUNTIME_IMAGE='@@RUNTIME_IMAGE@@'
 MIGRATION_IMAGE='@@MIGRATION_IMAGE@@'
@@ -501,7 +514,7 @@ APP_SECRET_ID='@@APP_SECRET_ID@@'
 MIGRATION_SECRET_ID='@@MIGRATION_SECRET_ID@@'
 MIGRATION_TIMEOUT='@@MIGRATION_TIMEOUT@@'
 ROLLOUT_TIMEOUT='@@ROLLOUT_TIMEOUT@@'
-JOB="$SVC-migration-$SHORT_SHA"
+JOB="$SVC-migration-$MIGRATION_JOB_ID"
 
 cleanup() {
     status=$?
@@ -588,7 +601,7 @@ if ! k3s kubectl -n "$NS" rollout status "deployment/$SVC" --timeout="${ROLLOUT_
 fi
 
 k3s kubectl -n "$NS" delete jobs \
-    -l "app.kubernetes.io/name=$SVC,app.kubernetes.io/component=migration,oficina.io/commit!=$SHORT_SHA" \
+    -l "app.kubernetes.io/name=$SVC,app.kubernetes.io/component=migration,oficina.io/deploy-run!=$DEPLOY_RUN_ID" \
     --ignore-not-found >/dev/null 2>&1 || true
 echo "Migration Jobs anteriores removidos por label."
 
@@ -624,6 +637,8 @@ $deploy = Invoke-RunCommand -InstanceId $instanceId -Comment "$serviceName deplo
         'NAMESPACE'           = $namespace
         'SERVICE'             = $serviceName
         'SHORT_SHA'           = $shortSha
+        'DEPLOY_RUN_ID'       = $deployRunId
+        'MIGRATION_JOB_ID'    = $migrationJobId
         'REGION'              = $AwsRegion
         'RUNTIME_IMAGE'       = $RuntimeImage
         'MIGRATION_IMAGE'     = $MigrationImage

@@ -1,5 +1,7 @@
 # oficina-ordens-servico
 
+![Coverage](https://img.shields.io/badge/line%20coverage-85.18%25-brightgreen.svg)
+
 Microsserviço de **ordens de serviço, orçamento e saga de pagamento** da solução **Oficina**. É também o **hub de execução local** e o repositório da **collection Postman** que valida a solução publicada.
 
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
@@ -35,7 +37,7 @@ A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AW
 
 | Repositório | Responsabilidade | Etapas |
 |---|---|:---:|
-| [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4) | Rede, banco de dados, segredos e estado do Terraform | 1 e 3 |
+| [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4) | Rede, banco de dados, segredos, estado do Terraform e admin inicial | 1, 3 e 5.1 |
 | [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4) | Plataforma Kubernetes/ALB e entrada de API | 2 e 8 |
 | [oficina-auth-lambda](https://github.com/fabianorodrigues/oficina-auth-lambda-fiap-fase4) | Autenticação por CPF e validação de token | 4 |
 | [oficina-cadastro](https://github.com/fabianorodrigues/oficina-cadastro-fiap-fase4) | Clientes, veículos, funcionários e catálogo de serviços | 5 |
@@ -52,9 +54,10 @@ A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AW
 |:---:|---|---|:---:|
 | 1 | oficina-infra-db | Database Infrastructure Deploy | `APPLY` |
 | 2 | oficina-infra | Platform Deploy | `APPLY` |
-| 3 | oficina-infra-db | Database Bootstrap | `BOOTSTRAP` |
+| 3 | oficina-infra-db | Database Bootstrap (estrutura) | `BOOTSTRAP` |
 | 4 | oficina-auth-lambda | Auth Deploy | `DEPLOY` |
 | 5 | oficina-cadastro | Cadastro Deploy | `DEPLOY` |
+| 5.1 | oficina-infra-db | Initial Admin Provision | `PROVISION_ADMIN` |
 | 6 | oficina-estoque | Estoque Deploy | `DEPLOY` |
 | **7** | **oficina-ordens-servico** | **Ordens Deploy** | `DEPLOY` |
 | 8 | oficina-infra | Entrypoint Deploy | `APPLY` |
@@ -63,7 +66,7 @@ A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AW
 Após a etapa 8, o **Observability Validate** (oficina-infra) está disponível como validação **opcional**.
 
 > [!IMPORTANT]
-> Este repositório aparece duas vezes: na **etapa 7**, como o terceiro dos três serviços, e na **etapa 9**, que **encerra a sequência** com a validação funcional executada pelo Collection Runner do Postman a partir de [postman/](postman/). É também o **hub de execução local**: seu arquivo de composição sobe os três serviços, o banco e as filas emuladas.
+> Este repositório aparece duas vezes: na **etapa 7**, como o terceiro dos três serviços, e na **etapa 9**, que **encerra a sequência** com a validação funcional executada pelo Collection Runner do Postman a partir de [postman/](postman/). A etapa 9 exige o admin inicial criado pela etapa **5.1**. É também o **hub de execução local**: seu arquivo de composição sobe os três serviços, o banco e as filas emuladas.
 
 ---
 
@@ -253,7 +256,7 @@ Executa o fluxo funcional contra o ambiente publicado, na ordem da collection: a
 Duas pré-condições obrigatórias:
 
 1. **Etapa 8 concluída** — antes do Entrypoint Deploy as rotas não existem na API Gateway.
-2. **Administrador inicial provisionado** — reexecute o **Database Bootstrap** com `provision_admin_user` = `true` em [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4#usuário-administrador-inicial--segunda-execução-do-bootstrap). Esse job exige que as migrations do Cadastro (etapa 5) já estejam aplicadas, por isso não pode rodar na etapa 3.
+2. **Administrador inicial provisionado** — execute o workflow **Initial Admin Provision** com `confirmation` = `PROVISION_ADMIN` em [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4#etapa-51-admin-inicial). Esse workflow exige que as migrations do Cadastro (etapa 5) já estejam aplicadas, por isso não pode rodar antes da etapa 5.
 
 Antes de rodar, preencha três variáveis do environment (nenhuma é versionada):
 
@@ -340,6 +343,12 @@ dotnet restore
 dotnet build -c Release
 dotnet test
 ```
+
+### Evidências de cobertura de testes
+
+- Line coverage real: **85.18%** (655/769 linhas), medido em 25/07/2026 com `dotnet test Oficina.OrdensServico.sln --configuration Release --settings .runsettings --collect:"XPlat Code Coverage"`.
+- CI: [Ordens CI](https://github.com/fabianorodrigues/oficina-ordens-servico-fiap-fase4/actions/workflows/ci.yml) executa o gate local de 80% e publica o artefato `coverage-${run_id}`.
+- Configuração de cobertura: [`.runsettings`](.runsettings) e [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Os testes cobrem casos de uso, contratos públicos, metadados de persistência e a integração de pagamento com o provedor simulado. A suíte inteira roda na integração contínua.
 
