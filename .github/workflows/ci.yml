@@ -17,7 +17,7 @@ env:
 
 jobs:
   validate:
-    name: Build, test, coverage and quality gate
+    name: Build, test and coverage gate
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -46,28 +46,41 @@ jobs:
             if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error "$($_.Extent.File): $($_.Message)" }; exit 1 }
           }
 
+      # A analise do SonarCloud e opcional. Sem SONAR_TOKEN ela e ignorada e o
+      # gate local de cobertura continua valendo sozinho. Com o token presente,
+      # a configuracao precisa estar completa: token sem projeto e engano de
+      # configuracao, nao motivo para pular em silencio.
+      - name: Resolve quality analysis mode
+        id: sonar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:SONAR_TOKEN)) {
+            'enabled=false' | Add-Content -Path $env:GITHUB_OUTPUT
+            'SonarCloud nao configurado: analise de qualidade ignorada. O gate local de cobertura permanece obrigatorio.' |
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            return
+          }
+          foreach ($name in @('SONAR_PROJECT_KEY', 'SONAR_ORGANIZATION')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "SONAR_TOKEN esta configurado, mas a Repository Variable $name esta ausente."
+            }
+          }
+          'enabled=true' | Add-Content -Path $env:GITHUB_OUTPUT
+
       - name: Setup Java for SonarCloud
+        if: steps.sonar.outputs.enabled == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Validate quality analysis variables
-        shell: pwsh
-        run: |
-          foreach ($name in @('SONAR_PROJECT_KEY', 'SONAR_ORGANIZATION')) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "Repository Variable $name is required for the quality gate."
-            }
-          }
-          if ([string]::IsNullOrWhiteSpace($env:SONAR_TOKEN)) {
-            throw 'Secret SONAR_TOKEN is required for the quality gate.'
-          }
-
       - name: Install SonarScanner
+        if: steps.sonar.outputs.enabled == 'true'
         run: dotnet tool install --global dotnet-sonarscanner
 
       - name: SonarCloud begin
+        if: steps.sonar.outputs.enabled == 'true'
         run: |
           export PATH="$PATH:$HOME/.dotnet/tools"
           dotnet sonarscanner begin \
@@ -130,6 +143,7 @@ jobs:
           retention-days: 7
 
       - name: SonarCloud end and quality gate
+        if: steps.sonar.outputs.enabled == 'true'
         run: |
           export PATH="$PATH:$HOME/.dotnet/tools"
           dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"

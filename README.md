@@ -159,7 +159,7 @@ Os cabeçalhos são confiáveis porque o ALB é interno e o acesso está restrit
 As ações externas de orçamento permitem que o cliente aprove ou recuse por link, sem autenticar: o token é validado e distingue link inválido, expirado e ação já processada.
 
 > [!NOTE]
-> `/ready` neste serviço responde de forma estática e **não verifica a conexão com o banco**.
+> `/ready` **verifica a conexão com o banco** e responde `503` quando ela falha. É esse endpoint que o *target group* do ALB usa como health check, então o destino só fica saudável com o serviço pronto para atender. `/health` continua refletindo apenas o processo.
 
 ---
 
@@ -203,8 +203,8 @@ Configure em **Settings → Secrets and variables → Actions** do repositório.
 |---|---|---|:---:|
 | Secret | `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` · `AWS_SESSION_TOKEN` | Credenciais temporárias da AWS | **Sim** |
 | Variable | `AWS_REGION` | Região dos recursos | **Sim** |
-| Variable | `SONAR_PROJECT_KEY` · `SONAR_ORGANIZATION` | Projeto e organização no SonarCloud | **Sim** |
-| Secret | `SONAR_TOKEN` | Token de análise do SonarCloud | **Sim** |
+| Variable | `SONAR_PROJECT_KEY` · `SONAR_ORGANIZATION` | Projeto e organização no SonarCloud | Só com `SONAR_TOKEN` |
+| Secret | `SONAR_TOKEN` | Token de análise do SonarCloud. Vazio ignora a análise; o gate local de cobertura continua valendo | Não |
 | Variable | `TF_STATE_BUCKET` | Fallback do bucket que recebe o pacote de manifests | Não |
 
 ### Papéis IAM — não provisionados automaticamente
@@ -242,7 +242,7 @@ Definidas pelo deploy no ConfigMap e nos Secrets do namespace; nenhuma precisa s
 
 **Actions → Ordens Deploy → Run workflow → `confirmation` = `DEPLOY`**
 
-Roda apenas na branch `main`. Sequência: **BDD distribuído** → valida a requisição e a integração de pagamentos → SonarCloud begin → compila → testa com cobertura → gate local de 80% → Quality Gate → descobre registro de imagem, node, filas e DNS do ALB → constrói as imagens → varredura de vulnerabilidades → envia ao ECR → **Stage** do pacote de manifests → remove objeto S3 e SecureString → **Deploy** (imagens, ConfigMap, Secrets, Migration Job, Deployment, Service, rollout e capacidade) → confirma destino saudável no ALB.
+Roda apenas na branch `main`. Sequência: **BDD distribuído** → valida a requisição e a integração de pagamentos → SonarCloud begin (quando configurado) → compila → testa com cobertura → gate local de 80% → Quality Gate (quando configurado) → descobre registro de imagem, node, filas e DNS do ALB → constrói as imagens → varredura de vulnerabilidades → envia ao ECR → **Stage** do pacote de manifests → remove objeto S3 e SecureString → **Deploy** (imagens, ConfigMap, Secrets, Migration Job, Deployment, Service, rollout e capacidade) → confirma destino saudável no ALB.
 
 ### Etapa 9 — Collection Postman (execução manual)
 
