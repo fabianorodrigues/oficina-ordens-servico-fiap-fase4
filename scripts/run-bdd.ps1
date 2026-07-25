@@ -44,7 +44,14 @@ function Assert-CommitSha([string]$Name, [string]$Value) {
 
 function New-LocalPassword {
     # Senha efemera, valida apenas dentro do compose desta execucao.
-    $bytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24)
+    $bytes = [byte[]]::new(24)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    }
+    finally {
+        $rng.Dispose()
+    }
     return 'Bdd!' + ([Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', '') + '9a'
 }
 

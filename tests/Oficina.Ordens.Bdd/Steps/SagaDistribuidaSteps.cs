@@ -29,6 +29,7 @@ public sealed class SagaDistribuidaSteps : IDisposable
     };
 
     private const string EventoReservaConfirmada = "EstoqueReservado";
+    private const int InboxProcessado = 3;
     private static readonly TimeSpan JanelaDeEstabilidade = TimeSpan.FromSeconds(15);
 
     private readonly OficinaApiClient _api;
@@ -166,15 +167,21 @@ public sealed class SagaDistribuidaSteps : IDisposable
     [When(@"o mesmo evento de reserva confirmada e reentregue")]
     public async Task QuandoEventoReentregue()
     {
-        var body = await BddEnvironment.QueryScalarAsync<string>(
-            "SELECT TOP 1 Body FROM InboxMessages WHERE OrdemServicoId = @ordem AND MessageType = @tipo ORDER BY Id DESC",
-            new Dictionary<string, object> { ["@ordem"] = _ordemId, ["@tipo"] = EventoReservaConfirmada },
+        string? body = null;
+        await BddEnvironment.WaitUntilAsync(
+            $"Inbox de Ordens com {EventoReservaConfirmada} processado",
+            async ct =>
+            {
+                body = await ObterCorpoReservaConfirmadaProcessadaAsync(ct);
+                return !string.IsNullOrWhiteSpace(body);
+            },
+            DescreverUltimoEstadoInboxReservaConfirmadaAsync,
             Ct);
 
         if (string.IsNullOrWhiteSpace(body))
         {
             throw new InvalidOperationException(
-                $"Nenhuma mensagem {EventoReservaConfirmada} encontrada no Inbox da ordem {_ordemId}.");
+                $"Nenhuma mensagem {EventoReservaConfirmada} processada no Inbox da ordem {_ordemId}.");
         }
 
         // Reentrega o envelope exato, com o mesmo messageId. Somente o
@@ -275,8 +282,8 @@ public sealed class SagaDistribuidaSteps : IDisposable
         Assert.Equal(1, total);
 
         var processadas = await BddEnvironment.QueryScalarAsync<int>(
-            "SELECT COUNT(1) FROM InboxMessages WHERE OrdemServicoId = @ordem AND MessageType = @tipo AND Status = 3",
-            new Dictionary<string, object> { ["@ordem"] = _ordemId, ["@tipo"] = EventoReservaConfirmada },
+            "SELECT COUNT(1) FROM InboxMessages WHERE OrdemServicoId = @ordem AND MessageType = @tipo AND Status = @status",
+            new Dictionary<string, object> { ["@ordem"] = _ordemId, ["@tipo"] = EventoReservaConfirmada, ["@status"] = InboxProcessado },
             Ct);
         Assert.Equal(1, processadas);
     }
@@ -299,6 +306,22 @@ public sealed class SagaDistribuidaSteps : IDisposable
             async ct => await _api.ObterSaldoDisponivelAsync(_pecaId, ct) == esperado,
             async ct => (await _api.ObterSaldoDisponivelAsync(_pecaId, ct)).ToString(CultureInfo.InvariantCulture),
             Ct);
+
+    private Task<string?> ObterCorpoReservaConfirmadaProcessadaAsync(CancellationToken ct)
+        => BddEnvironment.QueryScalarAsync<string>(
+            "SELECT TOP 1 Body FROM InboxMessages WHERE OrdemServicoId = @ordem AND MessageType = @tipo AND Status = @status ORDER BY Id DESC",
+            new Dictionary<string, object> { ["@ordem"] = _ordemId, ["@tipo"] = EventoReservaConfirmada, ["@status"] = InboxProcessado },
+            ct);
+
+    private async Task<string> DescreverUltimoEstadoInboxReservaConfirmadaAsync(CancellationToken ct)
+    {
+        var status = await BddEnvironment.QueryScalarAsync<string>(
+            "SELECT TOP 1 CAST(Status AS nvarchar(20)) FROM InboxMessages WHERE OrdemServicoId = @ordem AND MessageType = @tipo ORDER BY Id DESC",
+            new Dictionary<string, object> { ["@ordem"] = _ordemId, ["@tipo"] = EventoReservaConfirmada },
+            ct);
+
+        return status is null ? "sem mensagem no Inbox" : $"ultimo status no Inbox: {status}";
+    }
 
     private Task AguardarEstadoSagaAsync(string estado)
     {
