@@ -1,16 +1,29 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG DOTNET_VERSION=10.0
+
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
 WORKDIR /src
+
+COPY global.json ./
+COPY src/Oficina.OrdensServico.Domain/Oficina.OrdensServico.Domain.csproj src/Oficina.OrdensServico.Domain/
+COPY src/Oficina.OrdensServico.Application/Oficina.OrdensServico.Application.csproj src/Oficina.OrdensServico.Application/
+COPY src/Oficina.OrdensServico.Infrastructure/Oficina.OrdensServico.Infrastructure.csproj src/Oficina.OrdensServico.Infrastructure/
+COPY src/Oficina.OrdensServico.Api/Oficina.OrdensServico.Api.csproj src/Oficina.OrdensServico.Api/
+RUN dotnet restore src/Oficina.OrdensServico.Api/Oficina.OrdensServico.Api.csproj
+
 COPY . .
-RUN dotnet restore Oficina.OrdensServico.sln
 RUN dotnet publish src/Oficina.OrdensServico.Api/Oficina.OrdensServico.Api.csproj -c Release -o /app/publish --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS runtime
 WORKDIR /app
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /tmp/aws-rds-global-bundle.pem
 RUN cat /tmp/aws-rds-global-bundle.pem >> /etc/ssl/certs/ca-certificates.crt \
     && rm /tmp/aws-rds-global-bundle.pem
+COPY --from=build /app/publish .
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
-COPY --from=build /app/publish .
-USER app
+USER $APP_UID
 ENTRYPOINT ["dotnet", "Oficina.OrdensServico.Api.dll"]
