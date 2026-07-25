@@ -1,4 +1,4 @@
-namespace Oficina.OrdensServico.Domain.Oficina;
+namespace Oficina.OrdensServico.Domain.Ordens;
 
 public enum TipoManutencao { NaoClassificada = 0, Preventiva = 1, Corretiva = 2 }
 public enum StatusOrdemServico { Recebida = 1, EmDiagnostico = 2, AguardandoAprovacao = 3, EmExecucao = 4, Finalizada = 5, Entregue = 6 }

@@ -1,4 +1,4 @@
-using Oficina.OrdensServico.Domain.Oficina;
+using Oficina.OrdensServico.Domain.Ordens;
 
 namespace Oficina.OrdensServico.Application.Abstractions;
 

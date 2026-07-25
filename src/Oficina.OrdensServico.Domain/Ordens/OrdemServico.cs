@@ -1,6 +1,6 @@
-using Oficina.OrdensServico.Domain.Shared;
+using Oficina.OrdensServico.Domain.SharedKernel;
 
-namespace Oficina.OrdensServico.Domain.Oficina;
+namespace Oficina.OrdensServico.Domain.Ordens;
 
 public sealed class OrdemServico : Entidade
 {

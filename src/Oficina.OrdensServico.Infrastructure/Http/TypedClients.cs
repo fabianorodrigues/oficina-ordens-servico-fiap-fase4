@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Oficina.OrdensServico.Application.Abstractions;
 using Oficina.OrdensServico.Application.Contracts;
-using Oficina.OrdensServico.Domain.Oficina;
+using Oficina.OrdensServico.Domain.Ordens;
 
 namespace Oficina.OrdensServico.Infrastructure.Http;
 

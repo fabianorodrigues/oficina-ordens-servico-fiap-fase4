@@ -4,7 +4,7 @@ using Oficina.OrdensServico.Application.Contracts;
 using Oficina.OrdensServico.Application.Shared;
 using Oficina.OrdensServico.Application.UseCases;
 using Oficina.OrdensServico.Application.Validators;
-using Oficina.OrdensServico.Domain.Oficina;
+using Oficina.OrdensServico.Domain.Ordens;
 
 namespace Oficina.OrdensServico.UnitTests;
 

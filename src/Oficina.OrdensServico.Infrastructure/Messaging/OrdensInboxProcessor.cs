@@ -4,7 +4,7 @@ using Amazon.SQS.Model;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Oficina.OrdensServico.Domain.Oficina;
+using Oficina.OrdensServico.Domain.Ordens;
 using Oficina.OrdensServico.Infrastructure.Pagamentos;
 using Oficina.OrdensServico.Infrastructure.Persistencia;
 

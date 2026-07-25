@@ -17,7 +17,7 @@ public static class TrustedIdentityAuthenticationDefaults
 
 /// <summary>
 /// Materializa a identidade validada pelo authorizer da API Gateway, recebida como cabecalhos.
-/// Depende do acesso direto ao balanceador permanecer restrito ao VPC Link: os cabeçalhos
+/// Depende do acesso direto ao balanceador permanecer restrito ao VPC Link: os cabecalhos
 /// so sao confiaveis porque nenhum chamador externo alcanca o servico sem passar pela borda.
 /// </summary>
 public sealed class TrustedIdentityAuthenticationHandler(

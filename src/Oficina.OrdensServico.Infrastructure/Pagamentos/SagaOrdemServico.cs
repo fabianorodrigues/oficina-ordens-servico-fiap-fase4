@@ -1,4 +1,4 @@
-using Oficina.OrdensServico.Domain.Shared;
+using Oficina.OrdensServico.Domain.SharedKernel;
 
 namespace Oficina.OrdensServico.Infrastructure.Pagamentos;
 

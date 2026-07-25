@@ -1,5 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-using Oficina.OrdensServico.Domain.Oficina;
+using Oficina.OrdensServico.Domain.Ordens;
 using Oficina.OrdensServico.Infrastructure.Messaging;
 using Oficina.OrdensServico.Infrastructure.Pagamentos;
 
