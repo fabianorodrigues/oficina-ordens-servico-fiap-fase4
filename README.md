@@ -1,5 +1,7 @@
 # oficina-ordens-servico
 
+![Coverage](https://img.shields.io/badge/line%20coverage-85.18%25-brightgreen.svg)
+
 Microsserviço de **ordens de serviço, orçamento e saga de pagamento** da solução **Oficina**. É também o **hub de execução local** e o repositório da **collection Postman** que valida a solução publicada.
 
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
@@ -340,6 +342,12 @@ dotnet restore
 dotnet build -c Release
 dotnet test
 ```
+
+### Evidências de cobertura de testes
+
+- Line coverage real: **85.18%** (655/769 linhas), medido em 25/07/2026 com `dotnet test Oficina.OrdensServico.sln --configuration Release --settings .runsettings --collect:"XPlat Code Coverage"`.
+- CI: [Ordens CI](https://github.com/fabianorodrigues/oficina-ordens-servico-fiap-fase4/actions/workflows/ci.yml) executa o gate local de 80% e publica o artefato `coverage-${run_id}`.
+- Configuração de cobertura: [`.runsettings`](.runsettings) e [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Os testes cobrem casos de uso, contratos públicos, metadados de persistência e a integração de pagamento com o provedor simulado. A suíte inteira roda na integração contínua.
 
