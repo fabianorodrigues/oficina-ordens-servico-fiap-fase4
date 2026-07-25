@@ -44,11 +44,33 @@ public sealed class SagaDistribuidaSteps : IDisposable
     {
         var correlationId = Guid.NewGuid().ToString();
         _api = new OficinaApiClient(correlationId);
-        // Cada execucao cria seus proprios dados: cenarios nunca compartilham
+        // Cada cenario cria seus proprios dados: cenarios nunca compartilham
         // peca, cliente, veiculo ou ordem.
-        _sufixo = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)
-                  + Random.Shared.Next(100, 999).ToString(CultureInfo.InvariantCulture);
+        //
+        // A entropia vem so de sorteio, e nao do relogio. Um sufixo derivado do
+        // epoch perde os digitos que variam mais rapido assim que o valor e
+        // truncado no comprimento do documento, e os quatro cenarios, que rodam
+        // no mesmo segundo, colidem em 409.
+        _sufixo = DigitosAleatorios(10);
     }
+
+    private static string DigitosAleatorios(int quantidade)
+        => string.Create(quantidade, quantidade, (destino, total) =>
+        {
+            for (var i = 0; i < total; i++)
+            {
+                destino[i] = (char)('0' + Random.Shared.Next(10));
+            }
+        });
+
+    private static string LetrasAleatorias(int quantidade)
+        => string.Create(quantidade, quantidade, (destino, total) =>
+        {
+            for (var i = 0; i < total; i++)
+            {
+                destino[i] = (char)('A' + Random.Shared.Next(26));
+            }
+        });
 
     private CancellationToken Ct => _cts.Token;
 
@@ -79,9 +101,12 @@ public sealed class SagaDistribuidaSteps : IDisposable
     [Given(@"uma ordem de servico aberta com diagnostico registrado")]
     public async Task DadoUmaOrdemComDiagnostico()
     {
-        var documento = ("1" + _sufixo + "0000000").Substring(0, 11);
-        var renavam = ("2" + _sufixo + "0000000").Substring(0, 11);
-        var placa = ("BD" + _sufixo).Substring(0, 7).ToUpperInvariant();
+        // Documento e RENAVAM tem 11 digitos e placa tem 7 alfanumericos: os
+        // value objects recusam qualquer outro comprimento. Os valores sao
+        // montados no tamanho exato, sem truncar, para que a entropia sobreviva.
+        var documento = "1" + _sufixo;
+        var renavam = "2" + DigitosAleatorios(10);
+        var placa = LetrasAleatorias(3) + DigitosAleatorios(4);
         var email = $"cliente.bdd+{_sufixo}@example.invalid";
 
         var cliente = await _api.CriarClienteAsync(new
