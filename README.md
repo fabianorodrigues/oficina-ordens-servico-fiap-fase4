@@ -57,10 +57,10 @@ A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AW
 | **5** | cadastro · estoque · **oficina-ordens-servico** | **Deploy** | `DEPLOY` |
 | 6 | oficina-infra | Entrypoint Deploy | `APPLY` |
 | 7 | oficina-infra | Observability Validate | — |
-| **8** | **oficina-ordens-servico** | **AWS E2E Validate** | `VALIDATE` |
+| **8** | — | **Collection Postman** (execução manual) | — |
 
 > [!IMPORTANT]
-> Este repositório aparece na **etapa 5**, junto aos outros dois serviços, e **encerra a sequência na etapa 8** com a validação funcional de ponta a ponta. É também o **hub de execução local**: seu arquivo de composição sobe os três serviços, o banco e as filas emuladas.
+> Este repositório aparece na **etapa 5**, junto aos outros dois serviços, e **encerra a sequência na etapa 8** com a validação funcional de ponta a ponta, agora executada manualmente pelo Collection Runner do Postman a partir de [postman/](postman/). É também o **hub de execução local**: seu arquivo de composição sobe os três serviços, o banco e as filas emuladas.
 
 ---
 
@@ -238,11 +238,21 @@ Definidas pelo deploy na *task definition*; nenhuma precisa ser configurada no G
 
 Roda apenas na branch `main`. Sequência: valida a requisição, as variáveis e a integração de pagamentos → descobre cluster, registro de imagem, filas e DNS do ALB → confere que as filas são FIFO → compila e testa → constrói as imagens → varredura de vulnerabilidades → envia ao ECR → **executa a task de migração (ECS Run Task) e aguarda** → registra a *task definition* de runtime → **cria ou atualiza o serviço ECS** e aguarda ficar estável → confirma destino saudável no ALB.
 
-### Etapa 8 — AWS E2E Validate
+### Etapa 8 — Collection Postman (execução manual)
 
-**Actions → AWS E2E Validate → Run workflow → `confirmation` = `VALIDATE`**
+**Postman → importar [postman/oficina-main-flow.postman_collection.json](postman/oficina-main-flow.postman_collection.json) e [postman/oficina-main-flow.postman_environment.json](postman/oficina-main-flow.postman_environment.json) → Collection Runner**
 
-Executa o fluxo funcional contra o ambiente publicado: autentica, cadastra cliente e veículo, abre uma ordem, registra o diagnóstico, aprova o orçamento, acompanha a saga até a reserva de material e conclui a ordem. É a validação final da solução. Execute **apenas após a etapa 6**; antes disso as rotas ainda não existem.
+Executa o fluxo funcional contra o ambiente publicado, na ordem da collection: autentica o admin inicial, cria um funcionário, cadastra cliente e veículo, cadastra peça, ajusta estoque e cadastra serviço (com criação, alteração e consulta de cada um), abre uma ordem, classifica como corretiva, registra o diagnóstico, aprova o orçamento, repete a aprovação para provar a idempotência, acompanha a saga até a reserva de material, conclui e entrega a ordem, e fecha com o relatório e a manutenção do funcionário. É a validação final da solução. Execute **apenas após a etapa 6**; antes disso as rotas ainda não existem.
+
+Antes de rodar, preencha três variáveis do environment (nenhuma é versionada):
+
+| Variável | Origem |
+|---|---|
+| `baseUrl` | `aws ssm get-parameter --name /oficina/infra/api/url --query Parameter.Value --output text` |
+| `loginCpf` | Secret `ADMIN_INICIAL_CPF` |
+| `loginPassword` | Secret `ADMIN_INICIAL_PASSWORD` |
+
+O admin inicial é provisionado pelo job `provision-admin` do workflow **Database Bootstrap** (repositório `oficina-infra-db`), com o input `provision_admin_user` = `true`. O job só grava esse usuário e exige que as migrations do Cadastro já tenham sido aplicadas.
 
 ---
 
