@@ -5,13 +5,14 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: oficina-ordens-servico-migration-__SHORT_SHA__
+  name: oficina-ordens-servico-migration-__MIGRATION_JOB_ID__
   namespace: __NAMESPACE__
   labels:
     app.kubernetes.io/name: oficina-ordens-servico
     app.kubernetes.io/component: migration
     app.kubernetes.io/part-of: oficina
     oficina.io/commit: "__SHORT_SHA__"
+    oficina.io/deploy-run: "__DEPLOY_RUN_ID__"
 spec:
   backoffLimit: 0
   template:
@@ -20,12 +21,16 @@ spec:
         app.kubernetes.io/name: oficina-ordens-servico
         app.kubernetes.io/component: migration
         oficina.io/commit: "__SHORT_SHA__"
+        oficina.io/deploy-run: "__DEPLOY_RUN_ID__"
     spec:
       restartPolicy: Never
       containers:
         - name: oficina-ordens-servico-migration
           image: __MIGRATION_IMAGE__
           imagePullPolicy: IfNotPresent
+          env:
+            - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
+              value: /tmp/dotnet-bundle
           envFrom:
             - configMapRef:
                 name: oficina-ordens-servico-migration-config
@@ -52,4 +57,4 @@ spec:
       volumes:
         - name: tmp
           emptyDir:
-            sizeLimit: 64Mi
+            sizeLimit: 256Mi

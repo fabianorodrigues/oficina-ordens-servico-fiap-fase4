@@ -267,20 +267,28 @@ jobs:
             -AwsRegion "$env:AWS_REGION" `
             -CommitSha "$env:GITHUB_SHA" `
             -RunId "$env:GITHUB_RUN_ID" `
+            -RunAttempt "$env:GITHUB_RUN_ATTEMPT" `
             -StateBucket "${{ steps.platform.outputs.bucket }}" `
             -Transport "$env:MANIFEST_TRANSPORT"
 
       - name: Publish summary
+        if: always()
         run: |
           {
             echo "## Ordens Deploy"
             echo
+            echo "- Job status: ${{ job.status }}"
             echo "- Commit SHA: ${GITHUB_SHA}"
+            echo "- Run: ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             echo "- ECR repository: ${{ steps.platform.outputs.ecr }}"
             echo "- Runtime image tag: ${{ steps.platform.outputs.image_tag }}"
             echo "- Migration image tag: ${{ steps.platform.outputs.image_tag }}-migration"
             echo "- Service: oficina-ordens-servico"
             echo "- NodePort: 30082"
             echo "- Manifest transport: ${MANIFEST_TRANSPORT}"
-            echo "- Target group: healthy"
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "- Target group: healthy"
+            else
+              echo "- Target group: not confirmed"
+            fi
           } >> "${GITHUB_STEP_SUMMARY}"

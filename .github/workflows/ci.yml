@@ -11,6 +11,7 @@ permissions:
 env:
   SOLUTION: Oficina.OrdensServico.sln
   MIN_COVERAGE: "80"
+  KUBECONFORM_VERSION: "v0.6.7"
   SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
   SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
   SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -164,7 +165,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
             | tar -xz -C /usr/local/bin kubeconform
 
           render="$(mktemp -d)"
@@ -179,6 +180,8 @@ jobs:
               -e "s|__IMAGE__|example.invalid/oficina-ordens-servico:0.0.0-dryrun|g" \
               -e "s|__MIGRATION_IMAGE__|example.invalid/oficina-ordens-servico-migration:0.0.0-dryrun|g" \
               -e "s|__SHORT_SHA__|dryrun|g" \
+              -e "s|__DEPLOY_RUN_ID__|123456789-1|g" \
+              -e "s|__MIGRATION_JOB_ID__|dryrun-123456789abc|g" \
               -e "s|__NODE_PORT__|30082|g" \
               -e "s|__ALB_DNS__|alb.example.invalid|g" \
               -e "s|__COMMANDS_QUEUE_URL__|https://sqs.example.invalid/comandos|g" \
