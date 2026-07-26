@@ -24,6 +24,11 @@ function Get-ConfigMapValue {
     return $null
 }
 
+$dockerfilePath = "Dockerfile"
+Assert-True (Test-Path -LiteralPath $dockerfilePath -PathType Leaf) "Dockerfile ausente."
+$dockerfileRaw = Get-Content -LiteralPath $dockerfilePath -Raw
+Assert-True ($dockerfileRaw -match '(?m)^COPY\s+Directory\.Packages\.props\s+\./\s*$') "Dockerfile deve copiar Directory.Packages.props antes do dotnet restore."
+
 $raw = Get-Content -LiteralPath $ConfigPath -Raw
 $config = $raw | ConvertFrom-Json
 
@@ -124,6 +129,7 @@ foreach ($pattern in $forbiddenPatterns) {
 # ---------------------------------------------------------------------------
 
 $telemetryFound = $false
+$expectedOtlpEndpoint = 'http://nr-k8s-otel-collector-gateway.newrelic.svc.cluster.local:4317'
 
 if (Test-Path -LiteralPath $ManifestDirectory) {
     foreach ($manifest in Get-ChildItem -LiteralPath $ManifestDirectory -Filter '*.yaml' -File) {
@@ -148,6 +154,7 @@ if (Test-Path -LiteralPath $ManifestDirectory) {
         Assert-True ($null -ne $gate) "$name define OTEL_EXPORTER_OTLP_ENDPOINT sem OpenTelemetry__OtlpEndpoint: sem o gate nenhum exporter e registrado."
         Assert-True ($null -ne $sdk) "$name define OpenTelemetry__OtlpEndpoint sem OTEL_EXPORTER_OTLP_ENDPOINT: o SDK cairia no destino default."
         Assert-True ($gate -eq $sdk) "$name tem endpoints de telemetria divergentes: gate '$gate' e SDK '$sdk'."
+        Assert-True ($gate -eq $expectedOtlpEndpoint) "$name aponta OTLP para '$gate'; esperado '$expectedOtlpEndpoint'."
         Assert-True (-not [string]::IsNullOrWhiteSpace((Get-ConfigMapValue -Lines $lines -Key 'OTEL_SERVICE_NAME'))) "$name nao define OTEL_SERVICE_NAME."
         Assert-True (-not [string]::IsNullOrWhiteSpace((Get-ConfigMapValue -Lines $lines -Key 'OTEL_SERVICE_VERSION'))) "$name nao define OTEL_SERVICE_VERSION."
 
