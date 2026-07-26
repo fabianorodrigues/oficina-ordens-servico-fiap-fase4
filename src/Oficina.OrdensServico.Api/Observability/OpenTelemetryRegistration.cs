@@ -9,10 +9,10 @@ internal static class OpenTelemetryRegistration
 {
     /// <summary>
     /// Registro fail-open da telemetria.
-    /// Os dois gates originais permanecem: OpenTelemetry:Enabled desliga tudo e
-    /// OpenTelemetry:OtlpEndpoint decide se algum exporter e registrado. O
-    /// endpoint efetivo continua vindo de OTEL_EXPORTER_OTLP_ENDPOINT, lido pelo
-    /// proprio SDK.
+    /// OTEL_EXPORTER_OTLP_ENDPOINT e o unico gate necessario no Kubernetes: sem
+    /// endpoint, nada de OpenTelemetry e registrado. OpenTelemetry:Enabled=false
+    /// permanece aceito para ambientes locais que queiram desabilitar
+    /// explicitamente.
     /// </summary>
     public static IServiceCollection AddOpenTelemetryFailOpen(
         this IServiceCollection services,
@@ -27,8 +27,13 @@ internal static class OpenTelemetryRegistration
                 return services;
             }
 
+            var otlpEndpoint = ResolveOtlpEndpoint(configuration);
+            if (string.IsNullOrWhiteSpace(otlpEndpoint))
+            {
+                return services;
+            }
+
             var resource = OficinaTelemetryResource.Resolve(configuration, serviceName);
-            var exportEnabled = !string.IsNullOrWhiteSpace(configuration["OpenTelemetry:OtlpEndpoint"]);
 
             services.AddOpenTelemetry()
                 .ConfigureResource(builder => builder.AddService(
@@ -53,10 +58,7 @@ internal static class OpenTelemetryRegistration
                     tracing.AddAWSInstrumentation();
                     tracing.AddSource(OficinaTelemetry.ActivitySourceName);
 
-                    if (exportEnabled)
-                    {
-                        tracing.AddOtlpExporter(ConfigureExporterTimeout);
-                    }
+                    tracing.AddOtlpExporter(options => ConfigureExporter(options, otlpEndpoint));
                 })
                 .WithMetrics(metrics =>
                 {
@@ -66,10 +68,7 @@ internal static class OpenTelemetryRegistration
                     // Meter de negocio: oficina.os.* e oficina.integration.*.
                     metrics.AddMeter(OficinaTelemetry.MeterName);
 
-                    if (exportEnabled)
-                    {
-                        metrics.AddOtlpExporter((exporter, _) => ConfigureExporterTimeout(exporter));
-                    }
+                    metrics.AddOtlpExporter((exporter, _) => ConfigureExporter(exporter, otlpEndpoint));
                 });
         }
         catch (Exception ex)
@@ -80,10 +79,20 @@ internal static class OpenTelemetryRegistration
         return services;
     }
 
+    private static string? ResolveOtlpEndpoint(IConfiguration configuration)
+        => Normalize(configuration["OTEL_EXPORTER_OTLP_ENDPOINT"])
+           ?? Normalize(configuration["OpenTelemetry:OtlpEndpoint"]);
+
+    private static string? Normalize(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     // Telemetria nunca pode bloquear request, consumo ou health check: o timeout
     // curto garante que um Collector indisponivel falhe rapido e em silencio.
-    private static void ConfigureExporterTimeout(OpenTelemetry.Exporter.OtlpExporterOptions options)
-        => options.TimeoutMilliseconds = 5000;
+    private static void ConfigureExporter(OpenTelemetry.Exporter.OtlpExporterOptions options, string endpoint)
+    {
+        options.Endpoint = new Uri(endpoint);
+        options.TimeoutMilliseconds = 5000;
+    }
 }
 
 internal sealed class OpenTelemetryStartupWarningFilter(Exception exception) : IStartupFilter

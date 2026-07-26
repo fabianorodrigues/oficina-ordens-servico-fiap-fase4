@@ -88,7 +88,6 @@ services:
       Authentication__Mode: Development
       Database__ApplyMigrations: "true"
       ConnectionStrings__OficinaCadastroDb: Server=sqlserver,1433;Database=OficinaCadastroDb;User Id=oficina_cadastro_app;Password=${CADASTRO_DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=true
-      OpenTelemetry__Enabled: "false"
     ports:
       - "127.0.0.1:${CADASTRO_HTTP_PORT}:8080"
     depends_on:
@@ -111,7 +110,6 @@ services:
       Authentication__Mode: Development
       Database__ApplyMigrations: "true"
       ConnectionStrings__OficinaEstoqueDb: Server=sqlserver,1433;Database=OficinaEstoqueDb;User Id=oficina_estoque_app;Password=${ESTOQUE_DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=true
-      OpenTelemetry__Enabled: "false"
       Messaging__Sqs__Enabled: "true"
       Messaging__Sqs__ServiceUrl: http://localstack:4566
       Messaging__Sqs__Region: ${AWS_REGION}
@@ -147,7 +145,6 @@ services:
       Integrations__Cadastro__BaseUrl: http://cadastro-api:8080
       Integrations__Estoque__BaseUrl: http://estoque-api:8080
       DistributedFlow__Enabled: "true"
-      OpenTelemetry__Enabled: "false"
       # Mesmo comportamento de pagamento do ambiente AWS.
       Payments__UseMock: "true"
       Payments__Mode: Mock

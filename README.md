@@ -360,12 +360,11 @@ Os testes cobrem casos de uso, contratos públicos, metadados de persistência e
 Telemetria por OpenTelemetry, com um único Collector no cluster. Este é o serviço
 que concentra as **métricas de negócio** da solução.
 
-**Variáveis no ConfigMap:** `OpenTelemetry__Enabled`,
-`OpenTelemetry__OtlpEndpoint`, `OTEL_EXPORTER_OTLP_ENDPOINT` (igual ao anterior, e o
-guard reprova divergência), `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`,
-`OTEL_SERVICE_NAME=oficina-ordens-servico`, `OTEL_SERVICE_VERSION` (commit SHA),
-`OTEL_RESOURCE_ATTRIBUTES` e `OTEL_METRIC_EXPORT_INTERVAL`. Nenhuma credencial da
-New Relic entra no Pod.
+**Variáveis no ConfigMap:** `OTEL_EXPORTER_OTLP_ENDPOINT` (opcional; sem ele a
+API sobe sem registrar OpenTelemetry/exporter), `OTEL_SERVICE_VERSION` (commit
+SHA) e `OTEL_RESOURCE_ATTRIBUTES`. O `service.name` vem do código
+(`oficina-ordens-servico`), sem `OTEL_SERVICE_NAME` duplicado no manifesto.
+Nenhuma credencial da New Relic entra no Pod.
 
 **Contrato dos logs**, com os campos no nível superior do JSON:
 
