@@ -97,6 +97,14 @@ services:
       Authentication__Mode: ${AUTHENTICATION_MODE}
       Database__ApplyMigrations: ${DATABASE_APPLY_MIGRATIONS}
       ConnectionStrings__OficinaCadastroDb: Server=sqlserver,1433;Database=OficinaCadastroDb;User Id=oficina_cadastro_app;Password=${CADASTRO_DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=true
+      LocalInfrastructure__Enabled: ${LOCAL_INFRASTRUCTURE_ENABLED:-false}
+      LocalInfrastructure__Auth__Enabled: ${LOCAL_AUTH_ENABLED:-false}
+      LocalInfrastructure__Auth__SigningKey: ${LOCAL_AUTH_SIGNING_KEY:-}
+      LocalInfrastructure__SeedAdmin__Enabled: ${LOCAL_SEED_ADMIN_ENABLED:-false}
+      LocalInfrastructure__SeedAdmin__ResetPassword: ${LOCAL_SEED_ADMIN_RESET_PASSWORD:-true}
+      LocalInfrastructure__SeedAdmin__Cpf: ${LOCAL_ADMIN_CPF:-}
+      LocalInfrastructure__SeedAdmin__Password: ${LOCAL_ADMIN_PASSWORD:-}
+      LocalInfrastructure__SeedAdmin__Name: ${LOCAL_ADMIN_NAME:-Administrador Local}
     ports:
       - "127.0.0.1:${CADASTRO_HTTP_PORT}:8080"
     depends_on:
@@ -182,6 +190,56 @@ services:
       interval: 10s
       timeout: 5s
       retries: 18
+    networks:
+      - oficina-local
+
+  local-gateway:
+    image: node:20-alpine
+    environment:
+      CADASTRO_BASE_URL: http://cadastro-api:8080
+      ESTOQUE_BASE_URL: http://estoque-api:8080
+      ORDENS_BASE_URL: http://ordens-api:8080
+      LOCAL_AUTH_SIGNING_KEY: ${LOCAL_AUTH_SIGNING_KEY:-}
+    ports:
+      - "127.0.0.1:${LOCAL_GATEWAY_HTTP_PORT}:8080"
+    volumes:
+      - ./docker/local-gateway/server.js:/app/server.js:ro
+    command: ["node", "/app/server.js"]
+    depends_on:
+      cadastro-api:
+        condition: service_healthy
+      estoque-api:
+        condition: service_healthy
+      ordens-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - oficina-local
+
+  newman:
+    image: postman/newman:6-alpine
+    profiles: ["validation"]
+    depends_on:
+      local-gateway:
+        condition: service_healthy
+    volumes:
+      - ./postman:/etc/newman:ro
+      - ./artifacts/newman:/newman
+    command:
+      [
+        "run",
+        "/etc/newman/oficina-main-flow.postman_collection.json",
+        "-e",
+        "/etc/newman/oficina-main-flow.local.postman_environment.json",
+        "--reporters",
+        "cli,json",
+        "--reporter-json-export",
+        "/newman/oficina-main-flow-results.json"
+      ]
     networks:
       - oficina-local
 
