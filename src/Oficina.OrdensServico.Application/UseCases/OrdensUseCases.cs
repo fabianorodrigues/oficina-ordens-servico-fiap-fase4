@@ -7,7 +7,7 @@ using Oficina.OrdensServico.Domain.Ordens;
 
 namespace Oficina.OrdensServico.Application.UseCases;
 
-public sealed class OrdensUseCases(IOrdensServicoRepository repo, ICadastroClient cadastro, IEstoqueClient estoque, IValidator<AbrirOrdemServicoRequest> abrirValidator, IValidator<RegistrarDiagnosticoRequest> diagnosticoValidator, INotificadorCliente notificador, IOptions<DistributedFlowOptions> distributed, IFluxoDistribuidoOrdens fluxoDistribuido)
+public sealed class OrdensUseCases(IOrdensServicoRepository repo, ICadastroClient cadastro, IEstoqueClient estoque, IValidator<AbrirOrdemServicoRequest> abrirValidator, IValidator<RegistrarDiagnosticoRequest> diagnosticoValidator, INotificadorCliente notificador, IOptions<DistributedFlowOptions> distributed, IFluxoDistribuidoOrdens fluxoDistribuido, IOrdensBusinessMetrics metrics)
 {
     private static readonly TimeSpan PrazoExpiracaoAcaoExterna = TimeSpan.FromDays(7);
 
@@ -35,6 +35,9 @@ public sealed class OrdensUseCases(IOrdensServicoRepository repo, ICadastroClien
 
         repo.AdicionarOrdemServico(os);
         await repo.Salvar(ct);
+        // Emitida apos a persistencia: contar antes registraria ordem que nao
+        // existe se o Salvar falhar.
+        metrics.OrdemCriada();
         return new AbrirOrdemServicoResponse { Id = os.Id, Status = os.Status.ToString(), Total = total };
     }
 

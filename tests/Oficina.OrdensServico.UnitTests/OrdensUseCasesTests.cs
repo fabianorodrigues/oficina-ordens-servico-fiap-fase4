@@ -241,8 +241,17 @@ public sealed class OrdensUseCasesTests
         Itens = new() { Servicos = [new() { ServicoId = FakeEstoque.ServicoId }, new() { ServicoId = FakeEstoque.ServicoId }], Pecas = [new() { PecaId = FakeEstoque.PecaId, Quantidade = 1 }] }
     };
 
-    private static OrdensUseCases Criar(FakeRepo repo, FakeCadastro cadastro, FakeEstoque estoque, INotificadorCliente? notifier = null, IFluxoDistribuidoOrdens? fluxo = null, bool distributedEnabled = false) =>
-        new(repo, cadastro, estoque, new AbrirOrdemServicoRequestValidator(), new RegistrarDiagnosticoRequestValidator(), notifier ?? new FakeNotifier(), Options.Create(new DistributedFlowOptions { Enabled = distributedEnabled }), fluxo ?? new FakeFluxoDistribuido());
+    private static OrdensUseCases Criar(FakeRepo repo, FakeCadastro cadastro, FakeEstoque estoque, INotificadorCliente? notifier = null, IFluxoDistribuidoOrdens? fluxo = null, bool distributedEnabled = false, IOrdensBusinessMetrics? metrics = null) =>
+        new(repo, cadastro, estoque, new AbrirOrdemServicoRequestValidator(), new RegistrarDiagnosticoRequestValidator(), notifier ?? new FakeNotifier(), Options.Create(new DistributedFlowOptions { Enabled = distributedEnabled }), fluxo ?? new FakeFluxoDistribuido(), metrics ?? new FakeBusinessMetrics());
+}
+
+internal sealed class FakeBusinessMetrics : IOrdensBusinessMetrics
+{
+    public int OrdensCriadas { get; private set; }
+    public List<(string Integration, string Operation)> Falhas { get; } = [];
+
+    public void OrdemCriada() => OrdensCriadas++;
+    public void FalhaIntegracao(string integration, string operation) => Falhas.Add((integration, operation));
 }
 
 internal sealed class FakeRepo : IOrdensServicoRepository
