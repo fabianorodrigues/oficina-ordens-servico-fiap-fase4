@@ -27,8 +27,8 @@ data:
   # silencio. Nenhuma chave da New Relic entra aqui; so o Collector conhece a
   # license key.
   OpenTelemetry__Enabled: "true"
-  OpenTelemetry__OtlpEndpoint: "http://nr-otel-gateway.newrelic.svc.cluster.local:4317"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://nr-otel-gateway.newrelic.svc.cluster.local:4317"
+  OpenTelemetry__OtlpEndpoint: "http://nr-k8s-otel-collector-gateway.newrelic.svc.cluster.local:4317"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://nr-k8s-otel-collector-gateway.newrelic.svc.cluster.local:4317"
   OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
   OTEL_SERVICE_NAME: "oficina-ordens-servico"
   OTEL_SERVICE_VERSION: "__SHORT_SHA__"
