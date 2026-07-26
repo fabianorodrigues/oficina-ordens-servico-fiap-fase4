@@ -16,6 +16,7 @@ namespace Oficina.OrdensServico.Infrastructure.Messaging;
 internal static class MessagingTelemetry
 {
     private const string MessagingSystem = "aws.sqs";
+    private static readonly TextMapPropagator TraceContext = new TraceContextPropagator();
 
     /// <summary>
     /// Span do despacho do Outbox. Kind Internal, e nao Producer: quem publica e
@@ -143,7 +144,7 @@ internal static class MessagingTelemetry
             carrier["tracestate"] = tracestate;
         }
 
-        var context = Propagators.DefaultTextMapPropagator.Extract(
+        var context = TraceContext.Extract(
             default,
             carrier,
             static (source, key) => source.TryGetValue(key, out var value) ? [value] : []);

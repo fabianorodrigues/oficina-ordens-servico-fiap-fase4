@@ -15,6 +15,7 @@ internal static class MessageJson
 
     private const string TraceparentProperty = "traceparent";
     private const string TracestateProperty = "tracestate";
+    private static readonly TextMapPropagator TraceContext = new TraceContextPropagator();
 
     /// <summary>
     /// O Outbox e gravado dentro da transacao de negocio e publicado depois, em
@@ -29,7 +30,7 @@ internal static class MessageJson
         var activity = Activity.Current;
         if (activity is not null)
         {
-            Propagators.DefaultTextMapPropagator.Inject(
+            TraceContext.Inject(
                 new PropagationContext(activity.Context, Baggage.Current),
                 carrier,
                 static (target, key, value) => target[key] = value);
