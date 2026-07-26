@@ -714,15 +714,29 @@ public class OrdensObservabilidadeTests
     }
 
     [Fact]
-    public void Telemetria_habilitada_com_endpoint_registra_exporter()
+    public void Telemetria_sem_endpoint_nao_registra_nada()
     {
         var services = new ServiceCollection();
 
         services.AddOpenTelemetryFailOpen(
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["OpenTelemetry:Enabled"] = "true",
-                ["OpenTelemetry:OtlpEndpoint"] = "http://collector.example.invalid:4317"
+                ["OpenTelemetry:Enabled"] = "true"
+            }).Build(),
+            new LoggingBuilderStub(services), "oficina-ordens-servico");
+
+        Assert.DoesNotContain(services, x => x.ServiceType.FullName?.Contains("OpenTelemetry") == true);
+    }
+
+    [Fact]
+    public void Endpoint_otlp_registra_exporter()
+    {
+        var services = new ServiceCollection();
+
+        services.AddOpenTelemetryFailOpen(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://collector.example.invalid:4317"
             }).Build(),
             new LoggingBuilderStub(services), "oficina-ordens-servico");
 

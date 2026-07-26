@@ -97,7 +97,6 @@ services:
       Authentication__Mode: ${AUTHENTICATION_MODE}
       Database__ApplyMigrations: ${DATABASE_APPLY_MIGRATIONS}
       ConnectionStrings__OficinaCadastroDb: Server=sqlserver,1433;Database=OficinaCadastroDb;User Id=oficina_cadastro_app;Password=${CADASTRO_DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=true
-      OpenTelemetry__Enabled: "false"
     ports:
       - "127.0.0.1:${CADASTRO_HTTP_PORT}:8080"
     depends_on:
@@ -120,7 +119,6 @@ services:
       Authentication__Mode: ${AUTHENTICATION_MODE}
       Database__ApplyMigrations: ${DATABASE_APPLY_MIGRATIONS}
       ConnectionStrings__OficinaEstoqueDb: Server=sqlserver,1433;Database=OficinaEstoqueDb;User Id=oficina_estoque_app;Password=${ESTOQUE_DB_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=true
-      OpenTelemetry__Enabled: "false"
       Messaging__Sqs__Enabled: ${MESSAGING_SQS_ENABLED}
       Messaging__Sqs__ServiceUrl: http://localstack:4566
       Messaging__Sqs__Region: ${AWS_REGION}
@@ -160,7 +158,6 @@ services:
       Payments__TimeoutSeconds: "5"
       Payments__Scenario: ${PAYMENTS_SCENARIO:-aprovado}
       DistributedFlow__Enabled: "true"
-      OpenTelemetry__Enabled: "false"
       Messaging__Sqs__Enabled: ${MESSAGING_SQS_ENABLED}
       Messaging__Sqs__ServiceUrl: http://localstack:4566
       Messaging__Sqs__Region: ${AWS_REGION}

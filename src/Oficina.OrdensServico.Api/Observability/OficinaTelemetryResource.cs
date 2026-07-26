@@ -2,10 +2,9 @@ namespace Oficina.OrdensServico.Api.Observability;
 
 /// <summary>
 /// Fonte unica dos atributos de identidade do servico.
-/// service.name e service.version vem de OTEL_SERVICE_NAME e
-/// OTEL_SERVICE_VERSION; deployment.environment e lido de
-/// OTEL_RESOURCE_ATTRIBUTES. Nao existe segunda origem para o mesmo atributo:
-/// duas fontes divergem em silencio.
+/// service.name usa o nome padrao do codigo, salvo override explicito por
+/// OTEL_SERVICE_NAME. service.version vem de OTEL_SERVICE_VERSION e
+/// deployment.environment e lido de OTEL_RESOURCE_ATTRIBUTES.
 /// </summary>
 internal sealed record OficinaTelemetryResource(
     string ServiceName,
