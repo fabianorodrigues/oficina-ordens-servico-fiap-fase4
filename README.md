@@ -38,8 +38,8 @@ A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AW
 
 | Repositório | Responsabilidade | Etapas |
 |---|---|:---:|
-| [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4) | Rede, banco de dados, segredos, estado do Terraform e admin inicial | 1, 3 e 5.1 |
-| [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4) | Plataforma Kubernetes/ALB e entrada de API | 2 e 8 |
+| [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4) | Rede, banco de dados, segredos, estado do Terraform e admin inicial | 1, 3 e 6 |
+| [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4) | Plataforma Kubernetes/ALB, entrada de API e observabilidade | 2, 9 e 10 |
 | [oficina-auth-lambda](https://github.com/fabianorodrigues/oficina-auth-lambda-fiap-fase4) | Autenticação por CPF e validação de token | 4 |
 | [oficina-cadastro](https://github.com/fabianorodrigues/oficina-cadastro-fiap-fase4) | Clientes, veículos, funcionários e catálogo de serviços | 5 |
 | [oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4) | Peças, insumos, saldos e reservas | 6 |
@@ -58,16 +58,17 @@ A **Oficina** é uma plataforma de gestão de oficina mecânica implantada na AW
 | 3 | oficina-infra-db | Database Bootstrap (estrutura) | `BOOTSTRAP` |
 | 4 | oficina-auth-lambda | Auth Deploy | `DEPLOY` |
 | 5 | oficina-cadastro | Cadastro Deploy | `DEPLOY` |
-| 5.1 | oficina-infra-db | Initial Admin Provision | `PROVISION_ADMIN` |
-| 6 | oficina-estoque | Estoque Deploy | `DEPLOY` |
-| **7** | **oficina-ordens-servico** | **Ordens Deploy** | `DEPLOY` |
-| 8 | oficina-infra | Entrypoint Deploy | `APPLY` |
-| **9** | **oficina-ordens-servico** | **Collection Postman** (execução manual) | — |
+| 6 | oficina-infra-db | Initial Admin Provision | `PROVISION_ADMIN` |
+| 7 | oficina-estoque | Estoque Deploy | `DEPLOY` |
+| **8** | **oficina-ordens-servico** | **Ordens Deploy** | `DEPLOY` |
+| 9 | oficina-infra | Entrypoint Deploy | `APPLY` |
+| 10 | oficina-infra | Observability Deploy | `DEPLOY` |
+| **11** | **oficina-ordens-servico** | **Collection Postman** (execução manual) | — |
 
-Após a etapa 8, o **Observability Validate** (oficina-infra) está disponível como validação **opcional**.
+Após a etapa 9, execute o **Observability Deploy** (oficina-infra) com `mode=DEPLOY` antes da validação funcional final.
 
 > [!IMPORTANT]
-> Este repositório aparece duas vezes: na **etapa 7**, como o terceiro dos três serviços, e na **etapa 9**, que **encerra a sequência** com a validação funcional executada pelo Collection Runner do Postman a partir de [postman/](postman/). A etapa 9 exige o admin inicial criado pela etapa **5.1**. É também o **hub de execução local**: seu arquivo de composição sobe os três serviços, o banco e as filas emuladas.
+> Este repositório aparece duas vezes: na **etapa 8**, como o terceiro dos três serviços, e na **etapa 11**, que **encerra a sequência** com a validação funcional executada pelo Collection Runner do Postman a partir de [postman/](postman/). A etapa 11 exige o admin inicial criado pela etapa **6**. É também o **hub de execução local**: seu arquivo de composição sobe os três serviços, o banco e as filas emuladas.
 
 ---
 
@@ -248,7 +249,7 @@ Definidas pelo deploy no ConfigMap e nos Secrets do namespace; nenhuma precisa s
 
 Roda apenas na branch `main`. Sequência: **BDD distribuído** → valida a requisição e a integração de pagamentos → SonarCloud begin (quando configurado) → compila → testa com cobertura → gate local de 80% → Quality Gate (quando configurado) → descobre registro de imagem, node, filas e DNS do ALB → constrói as imagens → varredura de vulnerabilidades → envia ao ECR → **Stage** do pacote de manifests → remove objeto S3 e SecureString → **Deploy** (imagens, ConfigMap, Secrets, Migration Job, Deployment, Service, rollout e capacidade) → confirma destino saudável no ALB.
 
-### Etapa 9 — Collection Postman (execução manual)
+### Etapa 11 — Collection Postman (execução manual)
 
 **Postman → importar [postman/oficina-main-flow.postman_collection.json](postman/oficina-main-flow.postman_collection.json) e [postman/oficina-main-flow.postman_environment.json](postman/oficina-main-flow.postman_environment.json) → Collection Runner**
 
@@ -256,8 +257,9 @@ Executa o fluxo funcional contra o ambiente publicado, na ordem da collection: a
 
 Duas pré-condições obrigatórias:
 
-1. **Etapa 8 concluída** — antes do Entrypoint Deploy as rotas não existem na API Gateway.
-2. **Administrador inicial provisionado** — execute o workflow **Initial Admin Provision** com `confirmation` = `PROVISION_ADMIN` em [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4#etapa-51-admin-inicial). Esse workflow exige que as migrations do Cadastro (etapa 5) já estejam aplicadas, por isso não pode rodar antes da etapa 5.
+1. **Etapa 9 concluída** — a API Gateway publica as rotas somente no Entrypoint Deploy.
+2. **Etapa 10 concluída** — o Observability Deploy deve validar os sinais técnicos antes da execução funcional final.
+3. **Administrador inicial provisionado** — execute o workflow **Initial Admin Provision** com `confirmation` = `PROVISION_ADMIN` em [oficina-infra-db](https://github.com/fabianorodrigues/oficina-infra-db-fiap-fase4#etapa-6-admin-inicial). Esse workflow exige que as migrations do Cadastro (etapa 5) já estejam aplicadas, por isso não pode rodar antes da etapa 5.
 
 Antes de rodar, preencha três variáveis do environment (nenhuma é versionada):
 
@@ -292,7 +294,7 @@ INSTANCIA=$(aws ssm get-parameter --name /oficina/infra/k8s/instance-id \
 aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$INSTANCIA" \
   --region "$REGIAO" --query 'InstanceInformationList[0].PingStatus' --output text
 
-# Após a etapa 8, verificação de saúde pela API pública
+# Após a etapa 9, verificação de saúde pela API pública
 API=$(aws ssm get-parameter --name /oficina/infra/api/url \
   --region "$REGIAO" --query 'Parameter.Value' --output text)
 curl -s -o /dev/null -w '%{http_code}\n' "$API/health/ordens"
@@ -360,9 +362,9 @@ Os testes cobrem casos de uso, contratos públicos, metadados de persistência e
 Telemetria por OpenTelemetry, com um único Collector no cluster. Este é o serviço
 que concentra as **métricas de negócio** da solução.
 
-**Variáveis no ConfigMap:** `OTEL_EXPORTER_OTLP_ENDPOINT` (opcional; sem ele a
-API sobe sem registrar OpenTelemetry/exporter), `OTEL_SERVICE_VERSION` (commit
-SHA) e `OTEL_RESOURCE_ATTRIBUTES`. O `service.name` vem do código
+**Variáveis no ConfigMap:** `OTEL_EXPORTER_OTLP_ENDPOINT` (endpoint interno
+obrigatório do Collector; o exporter é fail-open se o gateway ainda não
+responder), `OTEL_SERVICE_VERSION` (commit SHA) e `OTEL_RESOURCE_ATTRIBUTES`. O `service.name` vem do código
 (`oficina-ordens-servico`), sem `OTEL_SERVICE_NAME` duplicado no manifesto.
 Nenhuma credencial da New Relic entra no Pod.
 
@@ -430,19 +432,23 @@ Detalhes, queries do dashboard, alertas e troubleshooting em `docs/OBSERVABILITY
 
 - **Pagamento simulado.** Não há integração com provedor externo; o caminho externo é bloqueado por validação de inicialização.
 - **Réplica única, sem escala automática**, por decisão de projeto.
-- **Validação funcional manual.** A verificação de ponta a ponta do ambiente publicado é a collection Postman da etapa 9, executada à mão; não há workflow que a rode.
+- **Validação funcional manual.** A verificação de ponta a ponta do ambiente publicado é a collection Postman da etapa 11, executada à mão; não há workflow que a rode.
 - **Compensação sem reprocessamento automático.** Uma saga que chega ao estado de falha de compensação exige intervenção manual.
 
 ---
 
 ## Próxima etapa
 
-**Depois da etapa 7 (Ordens Deploy) → etapa 8, obrigatória.**
+**Depois da etapa 8 (Ordens Deploy) → etapa 9, obrigatória.**
 Pré-condição: Deployment `oficina-ordens-servico` disponível no cluster e destino saudável no *target group*, com os três serviços no ar.
-**→ [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4)** — seção [Como executar → Etapa 8](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4#etapa-8--entrypoint-deploy), que publica a API Gateway e o VPC Link.
+**→ [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4)** — seção [Como executar → Entrypoint Deploy](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4#entrypoint-deploy), que publica a API Gateway e o VPC Link.
 
-**Depois da etapa 8 → etapa 9, obrigatória, aqui mesmo.**
-Pré-condição: API Gateway aplicada e administrador inicial provisionado.
-**→ [Como executar → Etapa 9](#etapa-9--collection-postman-execução-manual)**, neste README. Encerra a sequência: com ela aprovada, a solução está publicada e validada.
+**Depois da etapa 9 → etapa 10, obrigatória.**
+Pré-condição: API Gateway aplicada e URL pública publicada em `/oficina/infra/api/url`.
+**→ [oficina-infra](https://github.com/fabianorodrigues/oficina-infra-fiap-fase4)** — execute o **Observability Deploy** com `mode=DEPLOY` e `confirmation=DEPLOY`.
 
-Para revisar a etapa anterior, volte a **[oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4)** (etapa 6).
+**Depois da etapa 10 → etapa 11, obrigatória, aqui mesmo.**
+Pré-condição: observabilidade validada e administrador inicial provisionado.
+**→ [Como executar → Etapa 11](#etapa-11--collection-postman-execução-manual)**, neste README. Encerra a sequência: com ela aprovada, a solução está publicada e validada.
+
+Para revisar a etapa anterior, volte a **[oficina-estoque](https://github.com/fabianorodrigues/oficina-estoque-fiap-fase4)** (etapa 7).

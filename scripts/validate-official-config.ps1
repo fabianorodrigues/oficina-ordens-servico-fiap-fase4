@@ -118,8 +118,8 @@ foreach ($pattern in $forbiddenPatterns) {
 # ---------------------------------------------------------------------------
 # Contrato de observabilidade dos ConfigMaps.
 #
-# 1. OTEL_EXPORTER_OTLP_ENDPOINT e opcional. Sem ele, nenhum OpenTelemetry/exporter
-#    e registrado. Se ele existir, precisa apontar para o gateway real do chart.
+# 1. OTEL_EXPORTER_OTLP_ENDPOINT aponta para o gateway real do chart. O exporter
+#    deve ser fail-open quando o Collector ainda nao estiver disponivel.
 # 2. service.version nao pode ter duas origens: fica somente em
 #    OTEL_SERVICE_VERSION.
 # 3. Nenhuma credencial da New Relic pode entrar no Pod.
@@ -140,15 +140,12 @@ if (Test-Path -LiteralPath $ManifestDirectory) {
                 'NEW_RELIC_USER_API_KEY',
                 'NEW_RELIC_API_KEY',
                 'OTEL_EXPORTER_OTLP_HEADERS',
-                'OpenTelemetry__Enabled',
-                'OpenTelemetry__OtlpEndpoint',
                 'OTEL_EXPORTER_OTLP_PROTOCOL',
                 'OTEL_SERVICE_NAME',
                 'OTEL_METRIC_EXPORT_INTERVAL')) {
             Assert-True (-not ($lines | Select-String -Pattern "^\s+$([regex]::Escape($key))\s*:" -Quiet)) `
-                "$name declara $key. O ConfigMap deve manter observabilidade opcional e sem credenciais."
+                "$name declara $key. O ConfigMap deve manter OTLP fail-open e sem credenciais."
         }
-
         foreach ($pattern in @('NRAK-[A-Za-z0-9]{10,}', 'NRAA-[A-Za-z0-9]{10,}')) {
             Assert-True (-not ($lines | Select-String -Pattern $pattern -Quiet)) `
                 "$name contem valor com formato de chave da New Relic ($pattern)."
@@ -170,5 +167,7 @@ if (Test-Path -LiteralPath $ManifestDirectory) {
         }
     }
 }
+
+Assert-True $telemetryFound "ConfigMap da API deve declarar OTEL_EXPORTER_OTLP_ENDPOINT."
 
 Write-Host "official.json e contrato de observabilidade validos."

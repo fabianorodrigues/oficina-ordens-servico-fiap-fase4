@@ -9,10 +9,9 @@ internal static class OpenTelemetryRegistration
 {
     /// <summary>
     /// Registro fail-open da telemetria.
-    /// OTEL_EXPORTER_OTLP_ENDPOINT e o unico gate necessario no Kubernetes: sem
-    /// endpoint, nada de OpenTelemetry e registrado. OpenTelemetry:Enabled=false
-    /// permanece aceito para ambientes locais que queiram desabilitar
-    /// explicitamente.
+    /// OTEL_EXPORTER_OTLP_ENDPOINT e a unica chave aceita para o gateway OTLP.
+    /// Se o endpoint estiver ausente em execucao local, nada de OpenTelemetry e
+    /// registrado.
     /// </summary>
     public static IServiceCollection AddOpenTelemetryFailOpen(
         this IServiceCollection services,
@@ -22,11 +21,6 @@ internal static class OpenTelemetryRegistration
     {
         try
         {
-            if (!configuration.GetValue("OpenTelemetry:Enabled", true))
-            {
-                return services;
-            }
-
             var otlpEndpoint = ResolveOtlpEndpoint(configuration);
             if (string.IsNullOrWhiteSpace(otlpEndpoint))
             {
@@ -80,8 +74,7 @@ internal static class OpenTelemetryRegistration
     }
 
     private static string? ResolveOtlpEndpoint(IConfiguration configuration)
-        => Normalize(configuration["OTEL_EXPORTER_OTLP_ENDPOINT"])
-           ?? Normalize(configuration["OpenTelemetry:OtlpEndpoint"]);
+        => Normalize(configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
 
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
