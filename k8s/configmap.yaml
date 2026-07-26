@@ -19,9 +19,9 @@ data:
   ASPNETCORE_URLS: "http://+:8080"
   AWS_REGION: "__AWS_REGION__"
   Authentication__Mode: ""
-  # Observabilidade opcional. Sem OTEL_EXPORTER_OTLP_ENDPOINT o servico sobe sem
-  # registrar OpenTelemetry/exporter. O nome do servico vem do codigo; a versao
-  # vem somente de OTEL_SERVICE_VERSION.
+  # OTLP fail-open: o servico sobe mesmo antes do Collector responder; o exporter
+  # entrega telemetria quando o gateway estiver disponivel. O nome do servico vem
+  # do codigo; a versao vem somente de OTEL_SERVICE_VERSION.
   # service.version vem apenas de OTEL_SERVICE_VERSION e nao aparece em
   # OTEL_RESOURCE_ATTRIBUTES: duas origens para o mesmo atributo divergem em
   # silencio. Nenhuma chave da New Relic entra aqui; so o Collector conhece a

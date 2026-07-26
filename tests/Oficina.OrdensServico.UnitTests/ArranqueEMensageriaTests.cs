@@ -699,30 +699,12 @@ public class OrdensObservabilidadeTests
     }
 
     [Fact]
-    public void Telemetria_desabilitada_nao_registra_nada()
-    {
-        var services = new ServiceCollection();
-
-        services.AddOpenTelemetryFailOpen(
-            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["OpenTelemetry:Enabled"] = "false"
-            }).Build(),
-            new LoggingBuilderStub(services), "oficina-ordens-servico");
-
-        Assert.DoesNotContain(services, x => x.ServiceType.FullName?.Contains("OpenTelemetry") == true);
-    }
-
-    [Fact]
     public void Telemetria_sem_endpoint_nao_registra_nada()
     {
         var services = new ServiceCollection();
 
         services.AddOpenTelemetryFailOpen(
-            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["OpenTelemetry:Enabled"] = "true"
-            }).Build(),
+            new ConfigurationBuilder().Build(),
             new LoggingBuilderStub(services), "oficina-ordens-servico");
 
         Assert.DoesNotContain(services, x => x.ServiceType.FullName?.Contains("OpenTelemetry") == true);
