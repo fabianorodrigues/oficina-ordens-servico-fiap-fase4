@@ -16,8 +16,12 @@ public sealed class CorrelationHeaderHandler(IHttpContextAccessor accessor) : De
         var http = accessor.HttpContext;
         if (http is not null)
         {
-            if (http.Request.Headers.TryGetValue("X-Correlation-Id", out var correlation))
-                request.Headers.TryAddWithoutValidation("X-Correlation-Id", correlation.ToArray());
+            // Items tem precedencia sobre o header de entrada: quando o chamador
+            // nao envia X-Correlation-Id, o middleware gera um e o guarda ali.
+            // Ler somente o header deixaria o id gerado sem propagacao.
+            var correlationId = ResolveCorrelationId(http);
+            if (!string.IsNullOrWhiteSpace(correlationId))
+                request.Headers.TryAddWithoutValidation("X-Correlation-Id", correlationId);
             foreach (var header in IdentityHeaders)
                 if (http.Request.Headers.TryGetValue(header, out var identity))
                     request.Headers.TryAddWithoutValidation(header, identity.ToArray());
@@ -26,5 +30,18 @@ public sealed class CorrelationHeaderHandler(IHttpContextAccessor accessor) : De
                     request.Headers.TryAddWithoutValidation(header, value.ToArray());
         }
         return base.SendAsync(request, cancellationToken);
+    }
+
+    private static string? ResolveCorrelationId(HttpContext http)
+    {
+        if (http.Items.TryGetValue("X-Correlation-Id", out var fromItems) && fromItems is string value &&
+            !string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        return http.Request.Headers.TryGetValue("X-Correlation-Id", out var header) && !string.IsNullOrWhiteSpace(header)
+            ? header.ToString()
+            : null;
     }
 }

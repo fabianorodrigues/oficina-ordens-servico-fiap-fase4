@@ -26,6 +26,7 @@ Microsserviço de **ordens de serviço, orçamento e saga de pagamento** da solu
 - [Como executar](#como-executar)
 - [Validação](#validação)
 - [Execução local](#execução-local)
+- [Observabilidade](#observabilidade)
 - [Limitações conhecidas](#limitações-conhecidas)
 - [Próxima etapa](#próxima-etapa)
 
@@ -351,6 +352,78 @@ dotnet test
 - Configuração de cobertura: [`.runsettings`](.runsettings) e [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Os testes cobrem casos de uso, contratos públicos, metadados de persistência e a integração de pagamento com o provedor simulado. A suíte inteira roda na integração contínua.
+
+---
+
+## Observabilidade
+
+Telemetria por OpenTelemetry, com um único Collector no cluster. Este é o serviço
+que concentra as **métricas de negócio** da solução.
+
+**Variáveis no ConfigMap:** `OpenTelemetry__Enabled`,
+`OpenTelemetry__OtlpEndpoint`, `OTEL_EXPORTER_OTLP_ENDPOINT` (igual ao anterior, e o
+guard reprova divergência), `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`,
+`OTEL_SERVICE_NAME=oficina-ordens-servico`, `OTEL_SERVICE_VERSION` (commit SHA),
+`OTEL_RESOURCE_ATTRIBUTES` e `OTEL_METRIC_EXPORT_INTERVAL`. Nenhuma credencial da
+New Relic entra no Pod.
+
+**Contrato dos logs**, com os campos no nível superior do JSON:
+
+```
+timestamp, level, message, service.name, service.version, deployment.environment,
+correlationId, trace.id, span.id, ordemServicoId, messageId, messageType, sagaState
+```
+
+### Métricas de negócio
+
+`Meter` `Oficina.OrdensServico`:
+
+| Instrumento | Tipo | Dimensões |
+|---|---|---|
+| `oficina.os.created` | `Counter<long>` | — |
+| `oficina.os.status.transitions` | `Counter<long>` | `from_status`, `to_status`, `result` |
+| `oficina.os.status.duration` | `Histogram<double>` (s) | `status` |
+| `oficina.os.processing.failures` | `Counter<long>` | `stage`, `reason` |
+| `oficina.integration.failures` | `Counter<long>` | `integration`, `operation` |
+
+`integration` vem de um conjunto fechado: `cadastro`, `estoque`, `sqs`, `database`,
+`payment_mock`.
+
+> [!IMPORTANT]
+> São sinais operacionais **best-effort**. O banco e os `SagaSnapshots` continuam
+> sendo a fonte oficial dos estados da saga.
+
+As transições são acumuladas durante a transação e emitidas **somente depois do
+commit**, o que evita contagem em rollback e em reprocessamento do Inbox. Isso não é
+exactly-once: se o processo morrer entre o commit e o flush, a transação existe e a
+métrica não.
+
+`ordemServicoId` **nunca** entra como dimensão de métrica — só como atributo de span
+e campo de log. A duração usa o instante da transição processada com
+`max(0, transitionUtc - previousUpdatedAtUtc)`, e não o `OccurredAtUtc` da mensagem:
+relógio externo ou mensagem antiga produziriam duração negativa.
+
+`Recusado` no pagamento é resultado válido de negócio, não falha de integração, e por
+isso não entra em `oficina.integration.failures`.
+
+### Propagação de trace pelo SQS
+
+Uma única fonte de span por etapa: o envelope carrega o contexto capturado na criação
+do Outbox, o dispatcher abre um span `Internal` `oficina.outbox.dispatch`, a
+instrumentação AWS cria o span real de envio e injeta a propagação nos
+`MessageAttributes`, o receiver transfere esse contexto para o envelope persistido e o
+Inbox Processor abre a **única** Activity `Consumer`. Não há injeção manual de
+`traceparent`, que duplicaria o span de publicação.
+
+O `PagamentoProcessor` ganhou uma Activity própria — sem ela o processamento rodava
+sem contexto nenhum e as chamadas SQL ficavam órfãs no trace. O mock de pagamento
+permanece **intocado**: continua retornando `Approved`, e nenhuma decisão, retry ou
+compensação foi alterada.
+
+**Fail-open.** Falha do Collector ou do New Relic registra erro local e o serviço
+continua atendendo, consumindo mensagens e executando a saga.
+
+Detalhes, queries do dashboard, alertas e troubleshooting em `docs/OBSERVABILITY.md`.
 
 ---
 

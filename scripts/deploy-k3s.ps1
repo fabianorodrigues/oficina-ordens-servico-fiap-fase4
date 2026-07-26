@@ -269,7 +269,13 @@ foreach ($entry in $manifestFiles.GetEnumerator()) {
 }
 
 # O pacote nao pode conter valor sensivel: ele sai do runner e passa pelo S3.
-$forbidden = @('Password\s*=', 'Server\s*=\s*tcp:', 'AKIA[0-9A-Z]{16}', 'ASIA[0-9A-Z]{16}', 'aws_secret_access_key')
+$forbidden = @(
+    'Password\s*=', 'Server\s*=\s*tcp:', 'AKIA[0-9A-Z]{16}', 'ASIA[0-9A-Z]{16}', 'aws_secret_access_key',
+    # Credenciais da New Relic nunca entram no pacote: somente o Collector as
+    # conhece, e ele recebe a license key por Secret criado dentro da EC2.
+    'NEW_RELIC_LICENSE_KEY', 'NEW_RELIC_USER_API_KEY', 'OTEL_EXPORTER_OTLP_HEADERS',
+    'NRAK-[A-Za-z0-9]{10,}', 'NRAA-[A-Za-z0-9]{10,}'
+)
 foreach ($file in Get-ChildItem -LiteralPath $packageDir -File) {
     $raw = Get-Content -LiteralPath $file.FullName -Raw
     foreach ($pattern in $forbidden) {

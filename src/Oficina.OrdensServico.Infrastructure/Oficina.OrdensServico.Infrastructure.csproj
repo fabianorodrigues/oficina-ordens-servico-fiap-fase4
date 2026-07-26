@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Oficina.OrdensServico.Application\Oficina.OrdensServico.Application.csproj" />
@@ -13,10 +13,13 @@
     <InternalsVisibleTo Include="Oficina.OrdensServico.UnitTests" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="AWSSDK.SQS" Version="4.0.100.3" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.7" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.7" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.7">
+    <PackageReference Include="AWSSDK.SQS" />
+    <!-- Propagators e Baggage vivem em OpenTelemetry.Api: a Infrastructure
+         precisa injetar e extrair contexto W3C no envelope da mensagem. -->
+    <PackageReference Include="OpenTelemetry.Api" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>

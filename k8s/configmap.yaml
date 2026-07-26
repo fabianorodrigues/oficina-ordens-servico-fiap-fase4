@@ -19,6 +19,21 @@ data:
   ASPNETCORE_URLS: "http://+:8080"
   AWS_REGION: "__AWS_REGION__"
   Authentication__Mode: ""
+  # Observabilidade. OpenTelemetry__OtlpEndpoint e o gate que registra o exporter
+  # e OTEL_EXPORTER_OTLP_ENDPOINT e o que o SDK usa: os dois precisam ter o mesmo
+  # valor, e scripts/validate-official-config.ps1 reprova divergencia.
+  # service.version vem apenas de OTEL_SERVICE_VERSION e nao aparece em
+  # OTEL_RESOURCE_ATTRIBUTES: duas origens para o mesmo atributo divergem em
+  # silencio. Nenhuma chave da New Relic entra aqui; so o Collector conhece a
+  # license key.
+  OpenTelemetry__Enabled: "true"
+  OpenTelemetry__OtlpEndpoint: "http://nr-otel-gateway.newrelic.svc.cluster.local:4317"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://nr-otel-gateway.newrelic.svc.cluster.local:4317"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+  OTEL_SERVICE_NAME: "oficina-ordens-servico"
+  OTEL_SERVICE_VERSION: "__SHORT_SHA__"
+  OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=production,service.namespace=oficina,k8s.cluster.name=oficina-k3s"
+  OTEL_METRIC_EXPORT_INTERVAL: "60000"
   DistributedFlow__Enabled: "true"
   Integrations__Cadastro__BaseUrl: "http://__ALB_DNS__"
   Integrations__Estoque__BaseUrl: "http://__ALB_DNS__"

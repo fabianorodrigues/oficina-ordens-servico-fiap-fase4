@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Oficina.OrdensServico.Application.Abstractions;
 using Oficina.OrdensServico.Infrastructure.Http;
 using Oficina.OrdensServico.Infrastructure.Messaging;
+using Oficina.OrdensServico.Infrastructure.Observability;
 using Oficina.OrdensServico.Infrastructure.Pagamentos;
 using Oficina.OrdensServico.Infrastructure.Persistencia;
 
@@ -29,6 +30,13 @@ public static class DependencyInjection
             .UseSqlServer(cs)
             .ConfigureWarnings(warnings => warnings.Ignore(RelationalEventId.PendingModelChangesWarning)));
         services.AddScoped<IOrdensServicoRepository, OrdensServicoRepository>();
+
+        // As metricas de negocio sao singleton e criadas pelo IMeterFactory, para
+        // que o Meter tenha o mesmo ciclo de vida do provedor de telemetria.
+        services.AddMetrics();
+        services.AddSingleton<OficinaBusinessMetrics>();
+        services.AddSingleton<IOrdensBusinessMetrics>(sp => sp.GetRequiredService<OficinaBusinessMetrics>());
+
         services.AddHttpContextAccessor();
         services.AddTransient<CorrelationHeaderHandler>();
         services.AddHttpClient<ICadastroClient, CadastroClient>(c =>

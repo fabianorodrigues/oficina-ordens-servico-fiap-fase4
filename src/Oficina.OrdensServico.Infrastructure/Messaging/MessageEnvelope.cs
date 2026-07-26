@@ -2,6 +2,9 @@ using System.Text.Json;
 
 namespace Oficina.OrdensServico.Infrastructure.Messaging;
 
+// Traceparent e Tracestate sao opcionais e ficam no fim: o acrescimo e aditivo
+// e retrocompativel, e ParseAndValidate continua sem exigi-los. Mensagem gravada
+// antes desta mudanca simplesmente nao tem contexto de trace.
 public sealed record MessageEnvelope(
     Guid MessageId,
     string MessageType,
@@ -10,7 +13,9 @@ public sealed record MessageEnvelope(
     string CorrelationId,
     string? CausationId,
     Guid OrdemServicoId,
-    JsonElement Payload);
+    JsonElement Payload,
+    string? Traceparent = null,
+    string? Tracestate = null);
 
 public static class OrdensMessageTypes
 {

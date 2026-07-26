@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Oficina.OrdensServico.Api.Middleware;
@@ -14,10 +13,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Configuration.AddEnvironmentVariables();
 builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole(options =>
-{
-    options.JsonWriterOptions = new JsonWriterOptions { Indented = false };
-});
+builder.Logging.AddOficinaJsonConsole(builder.Configuration, defaultServiceName: "oficina-ordens-servico");
 
 builder.Services.AddControllers();
 builder.Services.AddOrdensApplication();
