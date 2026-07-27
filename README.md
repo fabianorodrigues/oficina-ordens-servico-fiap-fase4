@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <img alt="Line coverage" src="https://img.shields.io/badge/line%20coverage-85.18%25-brightgreen">
+  <img alt="Line coverage" src="https://img.shields.io/badge/line%20coverage-86.65%25-brightgreen">
   <img alt="Gate de cobertura" src="https://img.shields.io/badge/gate%20de%20cobertura-80%25-informational">
   <img alt="BDD" src="https://img.shields.io/badge/BDD-distribu%C3%ADdo-6DB33F">
 </p>
@@ -444,7 +444,7 @@ dotnet test
 
 | Item | Valor |
 |---|---|
-| Cobertura de linhas | **85,18%** (655/769 linhas) |
+| Cobertura de linhas | **86,65%** (948/1094 linhas) |
 | Gate exigido pela CI | 80% |
 | Comando | `dotnet test Oficina.OrdensServico.sln --configuration Release --settings .runsettings --collect:"XPlat Code Coverage"` |
 | Configuração | [`.runsettings`](.runsettings) e [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
