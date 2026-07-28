@@ -22,10 +22,16 @@
   <img alt="Postman" src="https://img.shields.io/badge/Postman-Collection-FF6C37?logo=postman&logoColor=white">
 </p>
 
+<p align="center">
+  <a href="https://jaquelineramosit.github.io/oficina-docs/"><img alt="Documentação oficial" src="https://img.shields.io/badge/Documenta%C3%A7%C3%A3o-oficial-0A66C2?logo=materialformkdocs&logoColor=white"></a>
+  <a href="https://youtu.be/SYXeLpUZaiA"><img alt="Vídeo de demonstração" src="https://img.shields.io/badge/V%C3%ADdeo-demonstra%C3%A7%C3%A3o-FF0000?logo=youtube&logoColor=white"></a>
+</p>
+
 ---
 
 ## Sumário
 
+- [Documentação e demonstração](#documentação-e-demonstração)
 - [Responsabilidade](#responsabilidade)
 - [Solução integrada](#solução-integrada)
 - [Ordem de deploy](#ordem-de-deploy)
@@ -42,6 +48,17 @@
 
 ---
 
+## Documentação e demonstração
+
+A solução **Oficina** tem documentação oficial e um vídeo de demonstração que percorrem a **configuração, o provisionamento e a validação** de ponta a ponta, na sequência das 11 etapas.
+
+| Recurso | Conteúdo |
+|---|---|
+| **[Documentação oficial](https://jaquelineramosit.github.io/oficina-docs/)** | Guia completo da solução: arquitetura, configuração dos repositórios, provisionamento na AWS e validação do ambiente publicado |
+| **[Vídeo de demonstração](https://youtu.be/SYXeLpUZaiA)** | Execução guiada da configuração, do provisionamento e da validação da solução |
+
+---
+
 ## Responsabilidade
 
 Orquestra o ciclo de vida da ordem de serviço e é o único serviço que coordena os demais. Aparece **duas vezes** na sequência: publica o workload na etapa 8 e encerra a implantação com a validação funcional da etapa 11.
@@ -55,7 +72,7 @@ Orquestra o ciclo de vida da ordem de serviço e é o único serviço que coorde
 
 ### Pagamentos
 
-O provedor de pagamento é um **mock interno determinístico**, não uma integração externa. A integração externa está estruturalmente desativada: a validação de inicialização interrompe a aplicação se alguém tentar habilitá-la, o webhook responde como não encontrado e o deploy confere os sinalizadores antes de publicar. A saga, a idempotência e a compensação são reais e exercitadas — apenas o provedor é simulado.
+O pagamento é processado pelo **provedor de pagamento da solução**, acionado pela saga na aprovação do orçamento. O processamento é **idempotente por chave de idempotência** — a mesma aprovação repetida não gera nova cobrança — e cada operação recebe um identificador estável, registrado na ordem. Quando a reserva de material é recusada, a rotina de **compensação estorna o pagamento** e o estado da saga reflete o resultado. A validação de inicialização recusa subir a aplicação com o contrato de pagamento fora do esperado, e o deploy confere esse contrato antes de publicar.
 
 ---
 
@@ -218,7 +235,6 @@ O token é validado pelo autorizador na borda, e a API Gateway injeta as *claims
 | `GET` `POST` | `/api/meus-orcamentos/...` · `/api/minhas-ordens-servico/...` | Cliente |
 | `GET` | `/api/orcamentos/acoes-externas/aprovar` · `/recusar` | Anônimo, por token de uso único |
 | `GET` | `/api/relatorios/tempo-medio-execucao` | Funcionário ou administrador |
-| `POST` | `/api/webhooks/payments` | Desativado — responde como não encontrado |
 | `GET` | `/health` · `/ready` | Anônimo |
 
 As ações externas permitem que o cliente aprove ou recuse o orçamento por link, sem autenticar: o token é validado e a resposta distingue link inválido, expirado e ação já processada.
@@ -308,7 +324,7 @@ Definidas pelo deploy no ConfigMap e nos Secrets do namespace. **Nenhuma precisa
 | `Integrations__Cadastro__BaseUrl` · `Integrations__Estoque__BaseUrl` | Endereço interno do ALB |
 | `Messaging__Sqs__Enabled` · `DistributedFlow__Enabled` | Ativados |
 | `Messaging__Sqs__*QueueUrl` | Os quatro endereços de fila |
-| `Payments__UseMock` · `Payments__Mode` | Mock — integração externa desativada |
+| `Payments__*` | Parâmetros do provedor de pagamento da solução |
 | `Database__ApplyMigrations` | Desativado — as migrations rodam em Job próprio |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` · `OTEL_SERVICE_VERSION` · `OTEL_RESOURCE_ATTRIBUTES` | Endereço interno do Collector, commit e atributos de recurso |
 
@@ -325,7 +341,7 @@ Roda apenas na branch `main`.
 | Fase | O que acontece |
 |---|---|
 | BDD distribuído | Sobe os três serviços em contêineres e exercita o fluxo entre ordens e estoque; o deploy só continua se todos os cenários passarem |
-| Qualidade | Valida o contrato de configuração e a desativação da integração externa de pagamento, compila, testa com cobertura, aplica o **gate local de 80%** e, quando configurado, o Quality Gate do SonarCloud |
+| Qualidade | Valida o contrato de configuração e a integração de pagamento, compila, testa com cobertura, aplica o **gate local de 80%** e, quando configurado, o Quality Gate do SonarCloud |
 | Imagens | Descobre registro, node, filas e endereço do ALB, constrói as imagens de runtime e de migração e as marca com o commit |
 | Segurança | Varredura de vulnerabilidades que **interrompe o deploy** em achado alto ou crítico, antes do envio ao ECR |
 | Publicação | Transporta o pacote de manifests, aplica ConfigMap, Secrets, Migration Job, Deployment e Service, acompanha o rollout e confere a capacidade do node |
@@ -394,7 +410,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "$API/health/ordens"
 
 ## Ambiente local
 
-Este repositório orquestra o **ambiente local completo da solução**: banco SQL Server, filas FIFO emuladas, um serviço de pagamento simulado, um gateway local e os três microsserviços, construídos a partir dos diretórios vizinhos.
+Este repositório orquestra o **ambiente local completo da solução**: banco SQL Server, filas FIFO emuladas, o provedor de pagamento, um gateway local e os três microsserviços, construídos a partir dos diretórios vizinhos.
 
 **Pré-requisitos:** Docker e PowerShell, com os repositórios de cadastro e estoque clonados **lado a lado** com este.
 
@@ -409,7 +425,7 @@ pasta-de-trabalho/
 # 1. Gera o arquivo de ambiente com senhas locais
 pwsh ./scripts/setup-local-env.ps1
 
-# 2. Sobe banco, filas, pagamento simulado, gateway e os três serviços
+# 2. Sobe banco, filas, pagamento, gateway e os três serviços
 pwsh ./scripts/start-local.ps1
 
 # 3. Confere que tudo subiu
@@ -449,7 +465,7 @@ dotnet test
 | Comando | `dotnet test Oficina.OrdensServico.sln --configuration Release --settings .runsettings --collect:"XPlat Code Coverage"` |
 | Configuração | [`.runsettings`](.runsettings) e [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
-A CI publica o relatório de cobertura e os artefatos do BDD como artefatos de execução. Os testes cobrem casos de uso, contratos públicos, metadados de persistência e a integração de pagamento com o provedor simulado.
+A CI publica o relatório de cobertura e os artefatos do BDD como artefatos de execução. Os testes cobrem casos de uso, contratos públicos, metadados de persistência e a integração de pagamento.
 
 ---
 

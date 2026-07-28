@@ -218,7 +218,7 @@ finally {
         "- Ordens: commit local $ordensHead"
         "- Cadastro: $cadastroRepository em $cadastroHead"
         "- Estoque: $estoqueRepository em $estoqueHead"
-        "- Pagamento: mock com retorno Approved, o mesmo do ambiente publicado"
+        "- Pagamento: provedor da solucao com retorno Approved, o mesmo do ambiente publicado"
         "- Timeout por etapa: $StepTimeoutSeconds s"
         ''
         'Digests das imagens em compose-images.json. Logs em compose-logs.txt.'
